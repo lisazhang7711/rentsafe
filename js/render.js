@@ -62,12 +62,19 @@
     return '<svg viewBox="0 0 ' + size + ' ' + size + '" width="100%" style="max-width:320px;display:block;margin:0 auto">' + g + labels + '</svg>';
   }
 
-  /* 关键点位表 */
+  /* 关键点位表：直线距离 与 实际路网距离/耗时 分列 */
   function poiTable(rows) {
-    var h = '<table class="poi"><thead><tr><th>类别</th><th>最近点位</th><th class="d">直线距离</th></tr></thead><tbody>';
+    var h = '<table class="poi"><thead><tr><th>类别</th><th>最近点位</th>' +
+      '<th class="d">直线</th><th class="d">实际路径</th></tr></thead><tbody>';
     rows.forEach(function (r) {
-      h += '<tr><td>' + esc(r.k) + '</td><td>' + (r.v ? esc(r.v) : '<span class="muted">未检索到</span>') +
-        '</td><td class="d">' + (r.d != null ? fmt(r.d) : '—') + '</td></tr>';
+      var rt = r.r ? M.routeTxt(r.r) : '';
+      var modeTxt = r.r && r.r.mode === 'drive'
+        ? '<span class="rc drive">驾车</span>'
+        : (rt ? '<span class="rc walk">步行</span>' : '');
+      h += '<tr><td>' + esc(r.k) + modeTxt + '</td>' +
+        '<td>' + (r.v ? esc(r.v) : '<span class="muted">未检索到</span>') + '</td>' +
+        '<td class="d">' + (r.d != null ? fmt(r.d) : '—') + '</td>' +
+        '<td class="d">' + (rt ? '<b>' + esc(rt) + '</b>' : '<span class="muted">—</span>') + '</td></tr>';
     });
     return h + '</tbody></table>';
   }
@@ -87,16 +94,17 @@
     var modeTxt = res.mode === 'rent' ? '租房' : '购房';
     var f = res.facts;
     var rows = [
-      { k: '综合医院', v: f.med && f.med.name, d: f.med && f.med.distance },
-      { k: '消防救援站', v: f.fire && f.fire.name, d: f.fire && f.fire.distance },
-      { k: '药店', v: f.pharmacy && f.pharmacy.name, d: f.pharmacy && f.pharmacy.distance },
-      { k: '超市 / 商场', v: f.supermarket && f.supermarket.name, d: f.supermarket && f.supermarket.distance },
-      { k: '菜市场 / 生鲜', v: f.market && f.market.name, d: f.market && f.market.distance },
-      { k: '便利店', v: f.convenience && f.convenience.name, d: f.convenience && f.convenience.distance },
-      { k: '应急疏散开阔地', v: f.shelter && f.shelter.name, d: f.shelter && f.shelter.distance },
-      { k: '警务资源', v: f.police && f.police.name, d: f.police && f.police.distance },
-      { k: '地铁站', v: f.metro && f.metro.name, d: f.metro && f.metro.distance }
+      { k: '综合医院', v: f.med && f.med.name, d: f.med && f.med.distance, r: f.med && f.med.route },
+      { k: '消防救援站', v: f.fire && f.fire.name, d: f.fire && f.fire.distance, r: f.fire && f.fire.route },
+      { k: '药店', v: f.pharmacy && f.pharmacy.name, d: f.pharmacy && f.pharmacy.distance, r: f.pharmacy && f.pharmacy.route },
+      { k: '超市 / 商场', v: f.supermarket && f.supermarket.name, d: f.supermarket && f.supermarket.distance, r: f.supermarket && f.supermarket.route },
+      { k: '菜市场 / 生鲜', v: f.market && f.market.name, d: f.market && f.market.distance, r: f.market && f.market.route },
+      { k: '便利店', v: f.convenience && f.convenience.name, d: f.convenience && f.convenience.distance, r: f.convenience && f.convenience.route },
+      { k: '应急疏散开阔地', v: f.shelter && f.shelter.name, d: f.shelter && f.shelter.distance, r: f.shelter && f.shelter.route },
+      { k: '警务资源', v: f.police && f.police.name, d: f.police && f.police.distance, r: f.police && f.police.route },
+      { k: '地铁站', v: f.metro && f.metro.name, d: f.metro && f.metro.distance, r: f.metro && f.metro.route }
     ];
+    var hasRoute = rows.some(function (r) { return r.r && r.r.d; });
 
     var dimHtml = res.dims.map(function (d) {
       return '<div class="dim"><div class="dh"><span class="dn">' + esc(d.name) + '</span>' +
@@ -146,8 +154,21 @@
 
       /* 关键点位 */
       '<section class="card pad" style="margin-bottom:16px">' +
-        '<div class="sec-t">最近关键点位（直线距离）</div>' + poiTable(rows) +
+        '<div class="sec-t">最近关键点位</div>' +
+        '<p class="hint small muted" style="margin:-4px 0 10px">' +
+          '「直线」是两点间的空中距离，只用于快速筛选；' +
+          '「实际路径」由高德步行 / 驾车路径规划算出，是真正要花的时间。' +
+          (hasRoute ? '' : '　<span class="warn-inline">本次未取到路网结果，实际路径列为空，报告中不再出现由直线距离换算的分钟数。</span>') +
+        '</p>' + poiTable(rows) +
       '</section>' +
+
+      (res.notes && res.notes.length
+        ? '<section class="card pad" style="margin-bottom:16px">' +
+            '<div class="sec-t">你填写的信息如何影响这次评分</div>' +
+            '<ul class="ev" style="margin:0">' +
+              res.notes.map(function (n) { return '<li>' + esc(n) + '</li>'; }).join('') +
+            '</ul></section>'
+        : '') +
 
       /* 风险 */
       '<section class="card pad" style="margin-bottom:16px">' +
@@ -167,7 +188,9 @@
       /* 页脚 */
       '<div class="foot-note">' +
         '生成时间：' + stamp + '　|　坐标：' + place.lng.toFixed(6) + ', ' + place.lat.toFixed(6) + '<br>' +
-        '数据来源：高德开放平台 POI 检索（半径 3 km，直线距离）。评分为公开数据推导的参考值，不替代消防验收、房屋质量检测与专业评估；' +
+        '数据来源：高德开放平台 POI 检索（半径 3 km）与路径规划（步行 / 驾车）。' +
+        '「直线」为两点间空中距离，「实际路径」为路网规划结果；未取到路网时不作折算。' +
+        '评分为公开数据推导的参考值，不替代消防验收、房屋质量检测与专业评估；' +
         '实际决策请以实地勘察与官方登记信息为准。' +
       '</div>';
 
@@ -184,6 +207,22 @@
     L.push('');
     L.push('— 六维得分 —');
     res.dims.forEach(function (d) { L.push(d.name + '：' + d.score + '（权重 ' + Math.round(d.weight * 100) + '%）'); });
+    L.push('');
+    L.push('— 最近关键点位 —');
+    [['综合医院', res.facts.med], ['消防救援站', res.facts.fire], ['药店', res.facts.pharmacy],
+     ['超市', res.facts.supermarket], ['菜市场', res.facts.market], ['便利店', res.facts.convenience],
+     ['应急疏散开阔地', res.facts.shelter], ['警务资源', res.facts.police], ['地铁站', res.facts.metro]
+    ].forEach(function (x) {
+      var p = x[1];
+      if (!p) return L.push('· ' + x[0] + '：未检索到');
+      L.push('· ' + x[0] + '：' + p.name + '（直线 ' + fmt(p.distance) +
+        (p.route && p.route.d ? '，' + M.routeTxt(p.route) : '') + '）');
+    });
+    if (res.notes && res.notes.length) {
+      L.push('');
+      L.push('— 补充信息对评分的影响 —');
+      res.notes.forEach(function (n) { L.push('· ' + n); });
+    }
     L.push('');
     L.push('— 风险提示 —');
     res.risks.forEach(function (r) { L.push('· ' + r.t + '：' + r.d); });
