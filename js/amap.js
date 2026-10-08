@@ -18,7 +18,7 @@
       s.src =
         'https://webapi.amap.com/maps?v=2.0&key=' +
         encodeURIComponent(cfg.key) +
-        '&plugin=AMap.AutoComplete,AMap.PlaceSearch,AMap.Geocoder,AMap.Geolocation,AMap.Scale,AMap.ToolBar';
+        '&plugin=AMap.AutoComplete,AMap.PlaceSearch,AMap.Geocoder,AMap.Geolocation,AMap.Scale,AMap.ToolBar,AMap.Walking,AMap.Driving';
       s.onload = function () {
         window.AMap ? resolve(window.AMap) : reject(new Error('AMap 未挂载'));
       };
@@ -173,6 +173,65 @@
     });
   }
 
+  /* ---------------- 路径规划（真实步行 / 驾车） ---------------- */
+
+  /**
+   * 单次路径规划。type: 'walk' | 'drive'
+   * 返回 { d: 路径米数, t: 分钟, mode }，失败返回 null。
+   * 高德返回的 time 单位在不同版本下可能不一致，这里用距离/速度反推做交叉校验。
+   */
+  function routeOnce(AMap, type, from, to) {
+    return new Promise(function (resolve) {
+      var finished = false;
+      var timer = setTimeout(function () { if (finished) return; finished = true; resolve(null); }, 9000);
+      function done(v) { if (finished) return; finished = true; clearTimeout(timer); resolve(v); }
+      try {
+        var svc = type === 'drive' ? new AMap.Driving({}) : new AMap.Walking({});
+        svc.search(from, to, function (status, result) {
+          if (status === 'complete' && result && result.routes && result.routes.length) {
+            var r = result.routes[0];
+            var dist = Number(r.distance) || 0;
+            if (!dist) return done(null);
+            // 城市步行约 80 m/min；驾车含红绿灯约 400 m/min
+            var speed = type === 'drive' ? 400 : 80;
+            var fallback = Math.max(1, Math.round(dist / speed));
+            var min = fallback, t = Number(r.time) || 0;
+            if (t > 0) {
+              var cand = Math.max(1, Math.round(t / 60));
+              if (cand >= fallback * 0.4 && cand <= fallback * 3 + 3) min = cand;
+            }
+            done({ d: dist, t: min, mode: type });
+          } else done(null);
+        });
+      } catch (e) { done(null); }
+    });
+  }
+
+  /**
+   * 串行节流批量路径规划。targets: [{id, lng, lat, mode, label}]
+   * 返回 { id: {d,t,mode} }，拿不到的 id 直接不出现（调用方需兜底）。
+   */
+  function routeBatch(origin, targets, onStep) {
+    return load().then(function (AMap) {
+      var out = {}, i = 0;
+      var gap = Math.max(300, cfg.gap || 260);
+      return new Promise(function (resolve) {
+        function step() {
+          if (i >= targets.length) return resolve(out);
+          var t = targets[i++];
+          routeOnce(AMap, t.mode || 'walk', [origin.lng, origin.lat], [t.lng, t.lat])
+            .catch(function () { return null; })
+            .then(function (r) {
+              if (r) out[t.id] = r;
+              if (onStep) onStep(i, targets.length, t.label || t.id);
+              setTimeout(step, gap);
+            });
+        }
+        step();
+      });
+    });
+  }
+
   /** 初始化小地图容器 */
   function initMap(el, lng, lat, zoom) {
     return load().then(function (AMap) {
@@ -189,6 +248,7 @@
 
   RS.geo = {
     load: load, suggest: suggest, geocode: geocode,
-    regeocode: regeocode, nearBatch: nearBatch, search: search, initMap: initMap
+    regeocode: regeocode, nearBatch: nearBatch, search: search,
+    routeBatch: routeBatch, initMap: initMap
   };
 })();
