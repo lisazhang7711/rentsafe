@@ -9,6 +9,22 @@
 
   var state = { mode: 'rent', place: null, result: null, map: null, markers: [] };
 
+  // 医疗类噪声（与 model 保持一致）：别把路径算到宠物医院头上
+  var MED_NOISE = /口腔|牙科|宠物|美容|整形|视力|眼镜|体检中心|中医馆|推拿|按摩/;
+
+  // 需要算真实路径的关键点位：消防与警务算「车程」，其余算「步行」
+  var ROUTE_PLAN = [
+    { id: 'med',         bag: 'medical',     mode: 'walk',  label: '到医院' },
+    { id: 'pharmacy',    bag: 'pharmacy',    mode: 'walk',  label: '到药店' },
+    { id: 'supermarket', bag: 'supermarket', mode: 'walk',  label: '到超市' },
+    { id: 'market',      bag: 'market',      mode: 'walk',  label: '到菜市场' },
+    { id: 'convenience', bag: 'convenience', mode: 'walk',  label: '到便利店' },
+    { id: 'shelter',     bag: 'shelter',     mode: 'walk',  label: '到避难开阔地' },
+    { id: 'metro',       bag: 'metro',       mode: 'walk',  label: '到地铁站' },
+    { id: 'fire',        bag: 'fire',        mode: 'drive', label: '消防车到场' },
+    { id: 'police',      bag: 'police',      mode: 'drive', label: '警力到场' }
+  ];
+
   /* ---------------- toast ---------------- */
   function toast(msg) {
     var t = $('toast') || (function () {
@@ -25,7 +41,11 @@
     document.querySelectorAll('.modes button').forEach(function (b) {
       b.classList.toggle('on', b.dataset.mode === m);
     });
-    $('optShare').closest('.field').style.display = m === 'rent' ? '' : 'none';
+    ['optShare', 'optPartition'].forEach(function (id) {
+      var el = $(id); if (!el) return;
+      var box = el.closest('.chk') || el.closest('.field');
+      if (box) box.style.display = m === 'rent' ? '' : 'none';
+    });
   }
 
   /* ---------------- 地址联想 ---------------- */
@@ -135,11 +155,28 @@
     var opt = {
       mode: state.mode,
       floor: $('optFloor').value === '' ? null : $('optFloor').value,
+      top: $('optTop').value,
       age: $('optAge').value === '' ? null : $('optAge').value,
-      noElevator: $('optElevator').value === 'no',
+      elevator: $('optElevator').value,
       door: $('optDoor').value,
+      camera: $('optCamera').value,
+      gas: $('optGas').value,
+      hydrant: $('optHydrant').value,
+      stair2: $('optStair2').value,
       share: $('optShare').checked,
-      basement: $('optBasement').checked
+      partition: $('optPartition').checked,
+      basement: $('optBasement').checked,
+      topfloor: $('optTopFloor').checked,
+      ebike: $('optEbike').checked,
+      clutter: $('optClutter').checked,
+      burglarbar: $('optBurglarBar').checked,
+      flood: $('optFlood').checked,
+      elderly: $('optElderly').checked,
+      toddler: $('optToddler').checked,
+      child: $('optChild').checked,
+      disabled: $('optDisabled').checked,
+      device: $('optDevice').checked,
+      pet: $('optPet').checked
     };
 
     // 地址去重拼接，避免出现「北京市朝阳区北京市朝阳区…」
@@ -178,7 +215,7 @@
       afterLocate();
       $('progText').textContent = '正在检索周边资源 0/' + M.QUERIES.length;
       return G.nearBatch(M.QUERIES, place.lng, place.lat, function (done, total, label) {
-        $('progBar').style.width = (6 + (done / total) * 90).toFixed(0) + '%';
+        $('progBar').style.width = (4 + (done / total) * 74).toFixed(0) + '%';
         $('progText').textContent = '正在检索：' + label + '（' + done + '/' + total + '）';
       }).then(function (bag) {
         // 距离补全 + 排序 + 去重
@@ -191,11 +228,30 @@
             if (seen[key]) return false; seen[key] = 1; return true;
           });
         });
-        return { bag: bag, place: place };
+        // 真实路径规划：步行 / 驾车，串行节流，失败即跳过（报告会明确标注未取到）
+        var targets = [];
+        ROUTE_PLAN.forEach(function (t) {
+          var list = bag[t.bag];
+          if (!list || !list.length) return;
+          // 医院要跳过口腔/宠物/美容这类噪声点，否则会算到一家宠物医院头上
+          var p = t.bag === 'medical'
+            ? list.filter(function (x) { return !MED_NOISE.test(x.name); })[0]
+            : list[0];
+          if (!p) return;
+          targets.push({ id: t.id, lng: p.lng, lat: p.lat, mode: t.mode, label: t.label });
+        });
+        $('progText').textContent = '正在计算实际路径 0/' + targets.length;
+        return G.routeBatch(place, targets, function (done, total, label) {
+          $('progBar').style.width = (78 + (done / total) * 20).toFixed(0) + '%';
+          $('progText').textContent = '正在计算实际路径：' + label + '（' + done + '/' + total + '）';
+        }).catch(function () { return {}; }).then(function (routes) {
+          return { bag: bag, place: place, routes: routes };
+        });
       });
     }).then(function (r) {
       $('progBar').style.width = '100%';
       $('progText').textContent = '检索完成，正在计算评分…';
+      opt.routes = r.routes || {};
       var res = M.evaluate(r.bag, opt);
       state.result = res; state.lastPlace = r.place;
       RS.render.report($('result'), res, r.place);
