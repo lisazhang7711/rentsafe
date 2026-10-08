@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>安居安全评估 · 租房买房前，先做一次安全体检</title>
+<meta name="description" content="输入小区名，3 秒生成应急医疗、消防安全、断电韧性、治安门禁、生活保障、环境风险六维安全评估报告，附断电 72 小时清单与看房确认清单。">
+<link rel="stylesheet" href="css/style.css?v=3">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-in">
+    <div class="brand">
+      <span class="mark">安</span>
+      <div>安居安全评估<small>租房 / 购房 前的六维体检</small></div>
+    </div>
+    <nav class="nav">
+      <a href="index.html" class="on">首页</a>
+      <a href="assess.html">开始评估</a>
+      <a href="#price">定价</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ============ Hero ============ -->
+  <section class="hero">
+    <h1>看房之前，先把这套房子的<br>安全账算清楚。</h1>
+    <p class="lead">
+      中介会告诉你地铁多近、学区多好，但没人会说：最近的消防站离这儿 4 公里，停电三天你能不能买到水。
+      输入小区名，系统检索周边 3 公里的应急与生活资源，给出一份能直接带去看房的体检报告。
+    </p>
+
+    <div class="hero-search">
+      <div class="row">
+        <input type="text" id="heroInput" placeholder="输入小区名或地址，例如：北京 朝阳区 北苑家园莲葩园">
+        <button class="btn" id="heroGo" style="white-space:nowrap">开始评估</button>
+      </div>
+      <div class="chips">
+        <span class="chip" data-a="北京市朝阳区北苑家园莲葩园">北苑家园莲葩园</span>
+        <span class="chip" data-a="北京市海淀区五道口华清嘉园">五道口华清嘉园</span>
+        <span class="chip" data-a="深圳市南山区科技园华润城">南山科技园华润城</span>
+        <span class="chip" data-a="上海市浦东新区张江汤臣豪园">张江汤臣豪园</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 六维 ============ -->
+  <section class="section">
+    <h2>它到底在看什么</h2>
+    <p class="sub">不是打分游戏，每一项都能落到「你明天看房时要问的一句」。</p>
+    <div class="grid3">
+      <div class="card pad feat">
+        <h4>应急医疗</h4>
+        <p>最近综合医院、社区卫生服务中心、药店的距离与数量。家里有老人小孩，这一项的权重比通勤重要得多。</p>
+      </div>
+      <div class="card pad feat">
+        <h4>消防安全</h4>
+        <p>消防救援站可达性 + 可疏散开阔地 + 你的楼层。18 层以上且消防站超过 2.5 km，会直接判定为高风险。</p>
+      </div>
+      <div class="card pad feat">
+        <h4>断电韧性</h4>
+        <p>假设停电停水 72 小时，你能否在步行范围内拿到水、食物与常用药。这是最容易被忽略、也最难补救的一项。</p>
+      </div>
+      <div class="card pad feat">
+        <h4>治安门禁</h4>
+        <p>警务资源距离 + 小区门禁物业状况 + 是否合租、是否低层。租房模式权重最高。</p>
+      </div>
+      <div class="card pad feat">
+        <h4>生活保障</h4>
+        <p>地铁、公交、采买、就学的日常运转成本。这一项决定你住着累不累。</p>
+      </div>
+      <div class="card pad feat">
+        <h4>环境风险</h4>
+        <p>加油站、变电站、垃圾站、殡葬设施的临近程度。买房模式权重最高——它直接影响未来的估值与出手难度。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 报告包含 ============ -->
+  <section class="section">
+    <h2>一份报告里有什么</h2>
+    <div class="grid2">
+      <div class="card pad">
+        <h4 style="margin-bottom:8px">① 六维评分与风险判定</h4>
+        <ul class="bullets">
+          <li>综合安全分 0–100，A/B/C/D 四级</li>
+          <li>雷达图一眼看出短板在哪一维</li>
+          <li>每一项都列出数据来源与距离，可自行复核</li>
+        </ul>
+      </div>
+      <div class="card pad">
+        <h4 style="margin-bottom:8px">② 断电 72 小时可用性清单</h4>
+        <ul class="bullets">
+          <li>按你的楼层与电梯情况定制</li>
+          <li>标注最近补给点与实际步行时间</li>
+          <li>可直接打印贴在玄关</li>
+        </ul>
+      </div>
+      <div class="card pad">
+        <h4 style="margin-bottom:8px">③ 看房 / 签约确认清单</h4>
+        <ul class="bullets">
+          <li>租房版：房东核验、合租规则、入住取证</li>
+          <li>购房版：产权抵押、学区规划、设备层与顶层</li>
+          <li>现场逐条打勾，避免签完才想起来</li>
+        </ul>
+      </div>
+      <div class="card pad">
+        <h4 style="margin-bottom:8px">④ 候选横向对比</h4>
+        <ul class="bullets">
+          <li>最多保存 8 套候选</li>
+          <li>六维分数并排对比</li>
+          <li>适合在两三套之间犹豫时使用</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 定价 ============ -->
+  <section class="section" id="price">
+    <h2>定价</h2>
+    <p class="sub">在线评分永久免费，付费的是「能带走的那份」。</p>
+    <div class="grid3">
+      <div class="card pad">
+        <h4>在线评估 · 免费</h4>
+        <p class="muted small">六维评分 + 关键点位 + 风险提示，网页直接看。</p>
+        <ul class="bullets">
+          <li>不限次数</li>
+          <li>支持租房 / 购房两种口径</li>
+        </ul>
+        <a class="btn ghost sm" style="margin-top:12px" href="assess.html">立即使用</a>
+      </div>
+      <div class="card pad" style="border-color:#0f6b5c">
+        <h4>完整报告 · ¥19.9</h4>
+        <p class="muted small">可打印 PDF / 图片版，含全部清单。</p>
+        <ul class="bullets">
+          <li>断电 72 小时清单</li>
+          <li>看房与签约确认清单</li>
+          <li>关键点位明细表</li>
+        </ul>
+        <a class="btn sm" style="margin-top:12px" href="assess.html">生成报告</a>
+      </div>
+      <div class="card pad">
+        <h4>深度定制 · ¥49.9</h4>
+        <p class="muted small">楼栋级 + 人工复核 + 通勤实测。</p>
+        <ul class="bullets">
+          <li>精确到楼栋与朝向</li>
+          <li>叠加本地内涝、规划与噪音核查</li>
+          <li>附一份决策建议</li>
+        </ul>
+        <a class="btn gray sm" style="margin-top:12px" href="assess.html">先做免费版</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 说明 ============ -->
+  <section class="section">
+    <h2>几个必须说清楚的问题</h2>
+    <div class="grid2">
+      <div class="card pad">
+        <h4 style="margin-bottom:6px">数据来源是什么？</h4>
+        <p class="small muted">基于高德开放平台 POI 检索，检索半径 3 公里，距离为直线距离（非步行距离）。所有点位名称与距离都列在报告里，你可以自己复核。</p>
+      </div>
+      <div class="card pad">
+        <h4 style="margin-bottom:6px">分数低就一定不能住吗？</h4>
+        <p class="small muted">不一定。评分反映的是「公共资源的兜底能力」：分数低意味着一旦出事，你能依靠的外部支援更少，需要自己多准备。它不替代实地勘察。</p>
+      </div>
+      <div class="card pad">
+        <h4 style="margin-bottom:6px">和内业评估有什么区别？</h4>
+        <p class="small muted">我们不提供房屋质量检测、消防验收或法律尽调。这份报告解决的是「看房前 30 分钟该查什么」，帮你把问题问到点上。</p>
+      </div>
+      <div class="card pad">
+        <h4 style="margin-bottom:6px">会保存我的搜索记录吗？</h4>
+        <p class="small muted">不会上传服务器。候选对比数据只存在你自己浏览器本地，清除浏览器数据即删除。</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="foot-note">
+    安居安全评估 · 基于高德开放平台数据构建　|　本报告为公开数据推导的参考信息，不构成投资、法律或专业鉴定意见，请结合实地勘察与官方登记信息决策。
+  </div>
+  <div style="height:40px"></div>
+
+</div>
+
+<script>
+(function () {
+  function go(a) {
+    if (!a) return;
+    location.href = 'assess.html?addr=' + encodeURIComponent(a);
+  }
+  document.getElementById('heroGo').onclick = function () {
+    go(document.getElementById('heroInput').value.trim());
+  };
+  document.getElementById('heroInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') go(this.value.trim());
+  });
+  document.querySelectorAll('.chip').forEach(function (c) {
+    c.onclick = function () { go(c.dataset.a); };
+  });
+})();
+</script>
+</body>
+</html>
