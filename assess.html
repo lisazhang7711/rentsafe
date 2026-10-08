@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>房屋安全评估 · 安居安全评估</title>
+<meta name="description" content="输入小区名或地址，3 秒内生成应急医疗、消防安全、断电韧性、治安门禁、生活保障、环境风险六维安全评估报告。">
+<link rel="stylesheet" href="css/style.css?v=3">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-in">
+    <div class="brand">
+      <span class="mark">安</span>
+      <div>安居安全评估<small>租房 / 购房 前的六维体检</small></div>
+    </div>
+    <nav class="nav">
+      <a href="index.html">首页</a>
+      <a href="assess.html" class="on">开始评估</a>
+      <a href="index.html#price">定价</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="work">
+
+    <!-- ============ 左：输入 ============ -->
+    <aside class="side">
+
+      <section class="card pad">
+        <div class="modes" style="margin-bottom:14px">
+          <button data-mode="rent" class="on">我要租房</button>
+          <button data-mode="buy">我要买房</button>
+        </div>
+
+        <div class="field ac-wrap">
+          <label for="addrInput">小区名 / 详细地址</label>
+          <input type="text" id="addrInput" placeholder="例如：北京市朝阳区北苑家园莲葩园" autocomplete="off">
+          <div class="ac-list" id="acList"></div>
+          <div class="hint">输入 2 个字以上会自动联想，也可点下方「用我的位置」</div>
+        </div>
+
+        <button class="btn gray sm" id="btnLocate" style="margin-bottom:14px">用我的位置</button>
+
+        <div id="placeCard" class="alert ok hidden" style="margin:0 0 14px">
+          <b id="placeName">—</b>
+          <div class="small" id="placeAddr" style="margin-top:3px"></div>
+        </div>
+
+        <details class="opt" style="margin-bottom:14px">
+          <summary>补充房屋信息（选填，越准越准）</summary>
+          <div class="body">
+            <div class="field-row">
+              <div class="field">
+                <label for="optFloor">所在楼层</label>
+                <input type="number" id="optFloor" min="-3" max="80" placeholder="如 18">
+              </div>
+              <div class="field">
+                <label for="optAge">房龄（年）</label>
+                <input type="number" id="optAge" min="0" max="80" placeholder="如 20">
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label for="optElevator">电梯</label>
+                <select id="optElevator">
+                  <option value="yes" selected>有电梯</option>
+                  <option value="no">无电梯</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="optDoor">门禁 / 物业</label>
+                <select id="optDoor">
+                  <option value="unk" selected>不清楚</option>
+                  <option value="yes">有门禁和物业</option>
+                  <option value="no">基本没有</option>
+                </select>
+              </div>
+            </div>
+            <label class="field" style="display:flex;gap:8px;align-items:center;font-weight:500">
+              <input type="checkbox" id="optShare" style="width:auto"> 合租
+            </label>
+            <label class="field" style="display:flex;gap:8px;align-items:center;font-weight:500">
+              <input type="checkbox" id="optBasement" style="width:auto"> 地下 / 半地下
+            </label>
+          </div>
+        </details>
+
+        <button class="btn" id="btnRun" style="width:100%;justify-content:center" disabled>开始评估</button>
+
+        <div class="progress hidden" id="progWrap">
+          <div class="pbar"><i id="progBar"></i></div>
+          <div class="ptext" id="progText">—</div>
+        </div>
+      </section>
+
+      <section class="card pad">
+        <div class="sec-t">位置确认</div>
+        <div class="mini-map" id="miniMap"></div>
+        <p class="hint small muted" style="margin-top:8px">绿点为目标位置，评估完成后会标出医院、消防站、避难场所、超市、地铁、警务点。</p>
+      </section>
+
+      <section class="card pad">
+        <div class="sec-t">我的候选</div>
+        <div id="candList"></div>
+        <button class="btn sm ghost" id="btnCompare" style="margin-top:12px;display:none">生成横向对比</button>
+      </section>
+
+    </aside>
+
+    <!-- ============ 右：结果 ============ -->
+    <main>
+      <div id="result">
+        <div class="card empty-state">
+          <div class="big">◎</div>
+          <div>输入一个小区名或地址，开始做安全体检</div>
+          <p class="small" style="margin-top:10px">
+            系统会检索 3 km 内的医院、消防站、避难场所、超市、菜场、便利店、地铁、警务点与嫌恶设施，
+            按六维模型打分，并生成断电 72 小时清单和看房确认清单。
+          </p>
+        </div>
+      </div>
+    </main>
+
+  </div>
+</div>
+
+<script src="js/config.js"></script>
+<script src="js/amap.js"></script>
+<script src="js/model.js"></script>
+<script src="js/render.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
