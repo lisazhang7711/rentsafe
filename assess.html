@@ -50,41 +50,118 @@
         </div>
 
         <details class="opt" style="margin-bottom:14px">
-          <summary>补充房屋信息（选填，越准越准）</summary>
+          <summary>补充房屋信息（选填，填了才准）</summary>
           <div class="body">
+
+            <div class="opt-grp">楼栋与户型</div>
             <div class="field-row">
               <div class="field">
                 <label for="optFloor">所在楼层</label>
                 <input type="number" id="optFloor" min="-3" max="80" placeholder="如 18">
               </div>
               <div class="field">
-                <label for="optAge">房龄（年）</label>
-                <input type="number" id="optAge" min="0" max="80" placeholder="如 20">
+                <label for="optTop">楼栋总高</label>
+                <select id="optTop">
+                  <option value="unk" selected>不清楚</option>
+                  <option value="le6">多层（≤6 层）</option>
+                  <option value="7-11">小高层（7–11 层）</option>
+                  <option value="12-18">高层（12–18 层）</option>
+                  <option value="19-33">高层（19–33 层）</option>
+                  <option value="34p">超高层（34 层以上）</option>
+                </select>
               </div>
             </div>
             <div class="field-row">
               <div class="field">
-                <label for="optElevator">电梯</label>
+                <label for="optAge">房龄（年）</label>
+                <input type="number" id="optAge" min="0" max="80" placeholder="如 20">
+              </div>
+              <div class="field">
+                <label for="optElevator">电梯状况</label>
                 <select id="optElevator">
-                  <option value="yes" selected>有电梯</option>
-                  <option value="no">无电梯</option>
+                  <option value="ok" selected>有且正常</option>
+                  <option value="flaky">有，但常故障</option>
+                  <option value="none">没有电梯</option>
+                  <option value="unk">不清楚</option>
                 </select>
               </div>
+            </div>
+            <div class="chk-grid">
+              <label class="chk"><input type="checkbox" id="optBasement"> 地下 / 半地下</label>
+              <label class="chk"><input type="checkbox" id="optTopFloor"> 顶层</label>
+              <label class="chk"><input type="checkbox" id="optShare"> 合租</label>
+              <label class="chk"><input type="checkbox" id="optPartition"> 隔断 / 群租</label>
+            </div>
+
+            <div class="opt-grp">消防与建筑隐患</div>
+            <div class="field-row">
+              <div class="field">
+                <label for="optHydrant">消火栓 / 烟感</label>
+                <select id="optHydrant">
+                  <option value="unk" selected>不清楚</option>
+                  <option value="yes">齐全</option>
+                  <option value="no">没有或缺失</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="optStair2">第二疏散楼梯</label>
+                <select id="optStair2">
+                  <option value="unk" selected>不清楚</option>
+                  <option value="yes">有两部及以上</option>
+                  <option value="no">只有一部</option>
+                </select>
+              </div>
+            </div>
+            <div class="field">
+              <label for="optGas">燃气类型</label>
+              <select id="optGas">
+                <option value="unk" selected>不清楚</option>
+                <option value="pipe">管道天然气</option>
+                <option value="bottle">瓶装液化气</option>
+                <option value="none">无燃气</option>
+              </select>
+            </div>
+            <div class="chk-grid">
+              <label class="chk"><input type="checkbox" id="optEbike"> 电动车入户 / 楼道充电</label>
+              <label class="chk"><input type="checkbox" id="optClutter"> 楼道堆物</label>
+              <label class="chk"><input type="checkbox" id="optBurglarBar"> 防盗窗无逃生口</label>
+              <label class="chk"><input type="checkbox" id="optFlood"> 曾发生内涝 / 积水</label>
+            </div>
+
+            <div class="opt-grp">同住人（决定权重）</div>
+            <div class="chk-grid">
+              <label class="chk"><input type="checkbox" id="optElderly"> 65 岁以上老人</label>
+              <label class="chk"><input type="checkbox" id="optToddler"> 学龄前儿童</label>
+              <label class="chk"><input type="checkbox" id="optChild"> 学龄儿童</label>
+              <label class="chk"><input type="checkbox" id="optDisabled"> 行动不便者</label>
+              <label class="chk"><input type="checkbox" id="optDevice"> 需电医疗设备</label>
+              <label class="chk"><input type="checkbox" id="optPet"> 养宠</label>
+            </div>
+
+            <div class="opt-grp">门禁与监控</div>
+            <div class="field-row">
               <div class="field">
                 <label for="optDoor">门禁 / 物业</label>
                 <select id="optDoor">
                   <option value="unk" selected>不清楚</option>
                   <option value="yes">有门禁和物业</option>
+                  <option value="part">有门禁但管理一般</option>
+                  <option value="no">基本没有</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="optCamera">公共区域监控</label>
+                <select id="optCamera">
+                  <option value="unk" selected>不清楚</option>
+                  <option value="yes">有覆盖</option>
                   <option value="no">基本没有</option>
                 </select>
               </div>
             </div>
-            <label class="field" style="display:flex;gap:8px;align-items:center;font-weight:500">
-              <input type="checkbox" id="optShare" style="width:auto"> 合租
-            </label>
-            <label class="field" style="display:flex;gap:8px;align-items:center;font-weight:500">
-              <input type="checkbox" id="optBasement" style="width:auto"> 地下 / 半地下
-            </label>
+
+            <p class="hint small muted" style="margin:4px 0 0">
+              不填也能出报告，按平均水平计；填得越细，消防与断电两项的偏差越小。
+            </p>
           </div>
         </details>
 
