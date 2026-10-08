@@ -1,0 +1,202 @@
+/**
+ * 安居安全评估 · 报告渲染
+ */
+(function () {
+  var RS = (window.RS = window.RS || {});
+  var M = RS.model;
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  function fmt(m) { return M.fmtDist(m); }
+
+  /* 总分环 */
+  function ring(score, grade) {
+    var R = 70, C = 2 * Math.PI * R;
+    var off = C * (1 - score / 100);
+    var col = M.scoreColor(score);
+    return (
+      '<div class="score-ring"><svg width="170" height="170" viewBox="0 0 170 170">' +
+      '<circle cx="85" cy="85" r="' + R + '" fill="none" stroke="#eceff2" stroke-width="14"/>' +
+      '<circle cx="85" cy="85" r="' + R + '" fill="none" stroke="' + col + '" stroke-width="14" ' +
+      'stroke-linecap="round" stroke-dasharray="' + C.toFixed(1) + '" stroke-dashoffset="' + off.toFixed(1) + '" ' +
+      'transform="rotate(-90 85 85)"/>' +
+      '</svg><div class="num"><div><b style="color:' + col + '">' + score + '</b><span>综合安全分 / 100</span></div></div></div>'
+    );
+  }
+
+  /* 六维雷达图 */
+  function radar(dims) {
+    var size = 300, cx = size / 2, cy = size / 2, R = 108;
+    var n = dims.length, i, a, x, y;
+    function pt(idx, r) {
+      var ang = -Math.PI / 2 + (idx * 2 * Math.PI) / n;
+      return [cx + Math.cos(ang) * r, cy + Math.sin(ang) * r];
+    }
+    var g = '';
+    for (var lv = 1; lv <= 4; lv++) {
+      var rr = (R * lv) / 4, pts = [];
+      for (i = 0; i < n; i++) { var p = pt(i, rr); pts.push(p[0].toFixed(1) + ',' + p[1].toFixed(1)); }
+      g += '<polygon points="' + pts.join(' ') + '" fill="' + (lv === 4 ? '#fbfcfd' : 'none') + '" stroke="#e3e7ec" stroke-width="1"/>';
+    }
+    for (i = 0; i < n; i++) {
+      var pe = pt(i, R);
+      g += '<line x1="' + cx + '" y1="' + cy + '" x2="' + pe[0].toFixed(1) + '" y2="' + pe[1].toFixed(1) + '" stroke="#e3e7ec"/>';
+    }
+    var dpts = [], dots = '';
+    for (i = 0; i < n; i++) {
+      var pd = pt(i, (R * Math.max(dims[i].score, 8)) / 100);
+      dpts.push(pd[0].toFixed(1) + ',' + pd[1].toFixed(1));
+      dots += '<circle cx="' + pd[0].toFixed(1) + '" cy="' + pd[1].toFixed(1) + '" r="3.2" fill="' + M.scoreColor(dims[i].score) + '"/>';
+    }
+    g += '<polygon points="' + dpts.join(' ') + '" fill="rgba(15,107,92,.14)" stroke="#0f6b5c" stroke-width="2"/>';
+    g += dots;
+    var labels = '';
+    for (i = 0; i < n; i++) {
+      var pl = pt(i, R + 24);
+      var anchor = Math.abs(pl[0] - cx) < 8 ? 'middle' : pl[0] > cx ? 'start' : 'end';
+      labels += '<text x="' + pl[0].toFixed(1) + '" y="' + (pl[1] + 4).toFixed(1) + '" text-anchor="' + anchor +
+        '" font-size="12.5" fill="#4a5563">' + esc(dims[i].name) + ' <tspan fill="#1b2027" font-weight="650">' + dims[i].score + '</tspan></text>';
+    }
+    return '<svg viewBox="0 0 ' + size + ' ' + size + '" width="100%" style="max-width:320px;display:block;margin:0 auto">' + g + labels + '</svg>';
+  }
+
+  /* 关键点位表 */
+  function poiTable(rows) {
+    var h = '<table class="poi"><thead><tr><th>类别</th><th>最近点位</th><th class="d">直线距离</th></tr></thead><tbody>';
+    rows.forEach(function (r) {
+      h += '<tr><td>' + esc(r.k) + '</td><td>' + (r.v ? esc(r.v) : '<span class="muted">未检索到</span>') +
+        '</td><td class="d">' + (r.d != null ? fmt(r.d) : '—') + '</td></tr>';
+    });
+    return h + '</tbody></table>';
+  }
+
+  /* 清单 */
+  function checklist(items, idpref) {
+    var h = '<ul class="checklist">';
+    items.forEach(function (it, i) {
+      h += '<li><input type="checkbox" id="' + idpref + i + '"><label for="' + idpref + i +
+        '" class="t"><b>' + esc(it.t) + '</b>' + (it.s ? '<span>' + esc(it.s) + '</span>' : '') + '</label></li>';
+    });
+    return h + '</ul>';
+  }
+
+  /** 渲染完整报告 */
+  function report(el, res, place) {
+    var modeTxt = res.mode === 'rent' ? '租房' : '购房';
+    var f = res.facts;
+    var rows = [
+      { k: '综合医院', v: f.med && f.med.name, d: f.med && f.med.distance },
+      { k: '消防救援站', v: f.fire && f.fire.name, d: f.fire && f.fire.distance },
+      { k: '药店', v: f.pharmacy && f.pharmacy.name, d: f.pharmacy && f.pharmacy.distance },
+      { k: '超市 / 商场', v: f.supermarket && f.supermarket.name, d: f.supermarket && f.supermarket.distance },
+      { k: '菜市场 / 生鲜', v: f.market && f.market.name, d: f.market && f.market.distance },
+      { k: '便利店', v: f.convenience && f.convenience.name, d: f.convenience && f.convenience.distance },
+      { k: '应急疏散开阔地', v: f.shelter && f.shelter.name, d: f.shelter && f.shelter.distance },
+      { k: '警务资源', v: f.police && f.police.name, d: f.police && f.police.distance },
+      { k: '地铁站', v: f.metro && f.metro.name, d: f.metro && f.metro.distance }
+    ];
+
+    var dimHtml = res.dims.map(function (d) {
+      return '<div class="dim"><div class="dh"><span class="dn">' + esc(d.name) + '</span>' +
+        '<span class="dv" style="color:' + M.scoreColor(d.score) + '">' + d.score + '</span></div>' +
+        '<div class="bar"><i style="width:' + d.score + '%;background:' + M.scoreColor(d.score) + '"></i></div>' +
+        '<ul class="ev">' + d.evidences.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ul></div>';
+    }).join('');
+
+    var riskHtml = res.risks.map(function (r) {
+      var cls = r.lv === 'dan' ? 'dan' : r.lv === 'ok' ? 'ok' : 'warn';
+      return '<div class="alert ' + cls + '"><b>' + esc(r.t) + '</b> — ' + esc(r.d) + '</div>';
+    }).join('');
+
+    var d = new Date();
+    var stamp = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+
+    el.innerHTML =
+      /* 结论 */
+      '<section class="card pad" style="margin-bottom:16px">' +
+        '<div class="verdict">' + ring(res.score, res.grade) +
+          '<div>' +
+            '<h3>' + esc(place.title) + ' <span class="grade ' + res.grade + '">' + res.grade + ' 级</span></h3>' +
+            '<p>' + esc(res.gradeTxt) + '。本次按「' + modeTxt + '」口径评估，' +
+              '共检索 3 km 内 ' + Object.keys(res.poiBag).length + ' 类生活与应急资源。</p>' +
+            '<div class="tagline">' +
+              '<span class="tag">优势：' + esc(res.highlights.join(' · ')) + '</span>' +
+              '<span class="tag">短板：' + esc(res.gaps.join(' · ')) + '</span>' +
+              '<span class="tag">' + esc(place.addr) + '</span>' +
+            '</div>' +
+            '<div class="actions no-print">' +
+              '<button class="btn sm" id="btn-print">导出 / 打印报告</button>' +
+              '<button class="btn sm gray" id="btn-copy">复制文字版</button>' +
+              '<button class="btn sm gray" id="btn-save">保存为候选</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</section>' +
+
+      /* 雷达 + 维度 */
+      '<section class="card pad" style="margin-bottom:16px">' +
+        '<div class="sec-t">六维安全结构</div>' +
+        '<div class="grid2" style="grid-template-columns:330px 1fr;align-items:center;gap:20px">' +
+          '<div>' + radar(res.dims) + '</div>' +
+          '<div class="dims" style="grid-template-columns:repeat(2,1fr);margin:0">' + dimHtml + '</div>' +
+        '</div>' +
+      '</section>' +
+
+      /* 关键点位 */
+      '<section class="card pad" style="margin-bottom:16px">' +
+        '<div class="sec-t">最近关键点位（直线距离）</div>' + poiTable(rows) +
+      '</section>' +
+
+      /* 风险 */
+      '<section class="card pad" style="margin-bottom:16px">' +
+        '<div class="sec-t">风险提示</div>' + riskHtml +
+      '</section>' +
+
+      /* 断电清单 */
+      '<section class="card pad" style="margin-bottom:16px">' +
+        '<div class="sec-t">断电 72 小时可用性清单</div>' + checklist(res.power72, 'p72-') +
+      '</section>' +
+
+      /* 看房清单 */
+      '<section class="card pad" style="margin-bottom:16px">' +
+        '<div class="sec-t">' + modeTxt + ' · 看房与签约确认清单</div>' + checklist(res.visit, 'vs-') +
+      '</section>' +
+
+      /* 页脚 */
+      '<div class="foot-note">' +
+        '生成时间：' + stamp + '　|　坐标：' + place.lng.toFixed(6) + ', ' + place.lat.toFixed(6) + '<br>' +
+        '数据来源：高德开放平台 POI 检索（半径 3 km，直线距离）。评分为公开数据推导的参考值，不替代消防验收、房屋质量检测与专业评估；' +
+        '实际决策请以实地勘察与官方登记信息为准。' +
+      '</div>';
+
+    document.title = place.title + ' · 安全评估 ' + res.score + ' 分';
+    return el;
+  }
+
+  /** 纯文本版本（用于复制） */
+  function toText(res, place) {
+    var L = [];
+    L.push('【' + place.title + '】安全评估报告');
+    L.push('地址：' + place.addr + '　口径：' + (res.mode === 'rent' ? '租房' : '购房'));
+    L.push('综合得分：' + res.score + ' / 100（' + res.grade + ' 级）— ' + res.gradeTxt);
+    L.push('');
+    L.push('— 六维得分 —');
+    res.dims.forEach(function (d) { L.push(d.name + '：' + d.score + '（权重 ' + Math.round(d.weight * 100) + '%）'); });
+    L.push('');
+    L.push('— 风险提示 —');
+    res.risks.forEach(function (r) { L.push('· ' + r.t + '：' + r.d); });
+    L.push('');
+    L.push('— 断电 72 小时清单 —');
+    res.power72.forEach(function (i) { L.push('□ ' + i.t + (i.s ? '（' + i.s + '）' : '')); });
+    L.push('');
+    L.push('— 看房确认清单 —');
+    res.visit.forEach(function (i) { L.push('□ ' + i.t); });
+    L.push('');
+    L.push('数据来源：高德开放平台 POI 检索，仅供参考，不替代专业评估。');
+    return L.join('\n');
+  }
+
+  RS.render = { report: report, toText: toText, ring: ring, radar: radar, esc: esc };
+})();
