@@ -1,7 +1,13 @@
 /**
  * 安居安全评估 · 评分模型
- * 输入：周边 POI 检索结果 + 用户补充信息（租/买、楼层、房龄…）
+ * 输入：周边 POI 检索结果 + 真实路径规划结果 + 用户补充信息
  * 输出：六维得分、总分、等级、结论、清单、风险项
+ *
+ * 距离口径说明：
+ *   distance —— 高德周边搜索返回的「直线距离」，仅用于快速排序与粗筛；
+ *   route    —— AMap.Walking / AMap.Driving 算出的真实路径长度与耗时，
+ *               报告里凡出现「步行 X 约 N 分钟 / 驾车 X 约 N 分钟」均来自 route，
+ *               绝不由直线距离简单折算。
  */
 (function () {
   var RS = (window.RS = window.RS || {});
@@ -36,11 +42,11 @@
   /* ---------------- 维度定义 ---------------- */
   var DIMS = [
     { id: 'em',    name: '应急医疗', icon: '＋', desc: '最近医院、社区卫生服务中心与药店的覆盖' },
-    { id: 'fire',  name: '消防安全', icon: '火', desc: '消防站可达性、避难开阔地、楼层与疏散条件' },
+    { id: 'fire',  name: '消防安全', icon: '火', desc: '消防站车程、避难开阔地、楼层高度与疏散条件' },
     { id: 'power', name: '断电韧性', icon: '电', desc: '停电 72 小时内能否就近获得水、食物与药品' },
-    { id: 'safe',  name: '治安门禁', icon: '安', desc: '警务资源距离与小区自身门禁、物业、合租情况' },
+    { id: 'safe',  name: '治安门禁', icon: '安', desc: '警务资源距离与小区自身门禁、监控、居住形态' },
     { id: 'life',  name: '生活保障', icon: '居', desc: '通勤、采买、子女就学等日常运转条件' },
-    { id: 'env',   name: '环境风险', icon: '环', desc: '加油站、变电站、垃圾站、殡葬等嫌恶设施影响' }
+    { id: 'env',   name: '环境风险', icon: '环', desc: '加油站、变电站、垃圾站、殡葬、内涝等影响' }
   ];
 
   var WEIGHT = {
@@ -60,10 +66,22 @@
     if (m == null) return '—';
     return m < 1000 ? Math.round(m / 10) * 10 + ' m' : (m / 1000).toFixed(1) + ' km';
   }
+  /** 路径文本：步行 1.2 km 约 15 分钟 / 驾车 3.4 km 约 9 分钟 */
+  function routeTxt(r) {
+    if (!r || !r.d) return '';
+    return (r.mode === 'drive' ? '驾车 ' : '步行 ') + fmtDist(r.d) + ' 约 ' + r.t + ' 分钟';
+  }
+  /** 点位距离文本：直线距离 + 真实路径（有则附） */
+  function distTxt(p, r) {
+    if (!p) return '未检索到';
+    var s = fmtDist(p.distance);
+    var rt = routeTxt(r);
+    return rt ? s + '，' + rt : s + '（直线）';
+  }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
   function round(v) { return Math.round(v * 10) / 10; }
 
-  /** 距离 -> 基础分；thresholds 形如 [[800,100],[1500,88],[3000,72],[5000,58]]，超出取 last */
+  /** 距离 -> 基础分；thresholds 形如 [[800,100],[1500,88]]，超出取 last */
   function distScore(list, thresholds, missScore) {
     if (!list || !list.length) return missScore == null ? 45 : missScore;
     var d = list[0].distance;
@@ -77,7 +95,6 @@
     var n = (list || []).length;
     return Math.min(cap == null ? 9 : cap, n * (unit || 1.5));
   }
-  function pick(list, n) { return (list || []).slice(0, n || 3); }
   function nearest(list) { return list && list.length ? list[0] : null; }
   function scoreColor(v) {
     if (v >= 85) return '#1a7f37';
@@ -91,49 +108,108 @@
     return /三甲|三级|人民|大学|附属|协和|同济|省立|市立|中心|中医|妇幼/.test(name || '');
   }
 
+  /* ---------------- 楼栋高度解析 ---------------- */
+  var TOP_MAP = { 'le6': 6, '7-11': 11, '12-18': 18, '19-33': 33, '34p': 54 };
+  function resolveHeight(opt) {
+    var f = opt.floor == null || opt.floor === '' ? 0 : Number(opt.floor) || 0;
+    var t = TOP_MAP[opt.top] || 0;
+    var H = Math.max(t, f);                       // 楼栋总高优先，其次所在楼层
+    return {
+      H: H, floor: f,
+      lv: H >= 34 ? 'super' : H >= 19 ? 'high' : H >= 12 ? 'mid' : H >= 7 ? 'small' : 'low',
+      txt: H ? (t ? '楼栋约 ' + (t === 54 ? '34 层以上' : t + ' 层') + (f ? '，本房在 ' + f + ' 层' : '')
+                  : '本房在 ' + f + ' 层') : '未填写'
+    };
+  }
+
+  /* ---------------- 动态权重 ---------------- */
+  function buildWeight(mode, o, h) {
+    var b = WEIGHT[mode], w = {}, k;
+    for (k in b) w[k] = b[k];
+    // 有老人 / 幼儿 / 需电设备 —— 医疗与断电的权重上调
+    if (o.elderly || o.toddler || o.device) w.em += .05;
+    if (o.device) w.power += .04;
+    // 楼层越高，消防权重越大
+    if (h.lv === 'super') w.fire += .06;
+    else if (h.lv === 'high') w.fire += .05;
+    else if (h.lv === 'mid') w.fire += .02;
+    // 行动不便者住高层，疏散是主要矛盾
+    if ((o.elderly || o.disabled) && h.H >= 7) w.fire += .03;
+    // 内涝史 / 地下空间 —— 环境风险权重上调
+    if (o.basement || o.flood) w.env += .04;
+    // 无幼儿时，就学便利的重要性下降
+    if (!o.toddler && !o.child) w.life -= .02;
+    var sum = 0;
+    for (k in w) { w[k] = Math.max(.03, w[k]); sum += w[k]; }
+    for (k in w) w[k] = w[k] / sum;
+    return w;
+  }
+
   /* ---------------- 主评估 ---------------- */
   function evaluate(poiBag, opt) {
     opt = opt || {};
     var mode = opt.mode || 'rent';
-    var W = WEIGHT[mode];
-    var ev = {};   // 各维度证据
-    var S = {};    // 各维度分
+    var R = opt.routes || {};
+    var h = resolveHeight(opt), H = h.H, lv = h.lv;
+    var W = buildWeight(mode, opt, h);
+    var ev = {}, S = {};
 
     /* —— 应急医疗 —— */
     var med = (poiBag.medical || []).filter(function (p) { return !MED_NOISE.test(p.name); });
-    // 真正的医院（排除基层机构），若一个都没有才退回用基层机构
     var hosp = med.filter(function (p) { return !MED_BASIC.test(p.name); });
     var useMed = hosp.length ? hosp : med;
     var bigMed = useMed.filter(function (p) { return isBigHospital(p.name); });
     var useBig = bigMed.length ? bigMed : useMed;
+    var nm = nearest(useBig);
     var medBase = distScore(useBig, [[600, 100], [1200, 88], [2500, 74], [4000, 60]], 40);
     var sEm = clamp(medBase * .55 +
                     distScore(poiBag.clinic, [[500, 100], [1000, 90], [1800, 78]], 52) * .25 +
                     distScore(poiBag.pharmacy, [[200, 100], [500, 90], [1000, 78]], 55) * .20 +
                     densityBonus(poiBag.pharmacy, 1.0, 5), 0, 100);
+    // 家中有老人 / 需电设备 / 幼儿时，医院远一点更致命
+    if ((opt.elderly || opt.device) && nm && nm.distance > 2000) sEm -= 6;
+    if (opt.toddler && nm && nm.distance > 3000) sEm -= 4;
+    sEm = clamp(sEm, 0, 100);
     ev.em = [
-      '最近医院：' + (nearest(useBig) ? nearest(useMed).name + '（' + fmtDist(nearest(useMed).distance) + '）' : '3 km 内未检索到'),
+      '最近医院：' + (nm ? nm.name + '（' + distTxt(nm, R.med) + '）' : '3 km 内未检索到'),
       '社区卫生服务中心：' + (nearest(poiBag.clinic) ? fmtDist(nearest(poiBag.clinic).distance) : '未检索到'),
       '药店：' + (poiBag.pharmacy && poiBag.pharmacy.length
-        ? poiBag.pharmacy.length + ' 家，最近 ' + fmtDist(nearest(poiBag.pharmacy).distance)
+        ? poiBag.pharmacy.length + ' 家，最近 ' + distTxt(nearest(poiBag.pharmacy), R.pharmacy)
         : '未检索到')
     ];
 
     /* —— 消防安全 —— */
+    var nf = nearest(poiBag.fire);
     var sFire = clamp(
       distScore(poiBag.fire, [[1200, 100], [2500, 84], [4500, 68]], 44) * .68 +
       distScore(poiBag.shelter, [[400, 100], [1000, 88], [2000, 75]], 48) * .32, 0, 100);
-    var f = opt.floor == null ? null : Number(opt.floor);
+    // 建筑高度
+    if (lv === 'mid') sFire -= 4;
+    if (lv === 'high') sFire -= 8;
+    if (lv === 'super') sFire -= 13;
+    // 建筑与消防硬件
     if (opt.basement) sFire -= 8;
-    if (f != null && f >= 19) sFire -= 7;
-    if (f != null && f >= 34) sFire -= 5;              // 超高层
-    if (opt.age && Number(opt.age) >= 30) sFire -= 6;  // 老旧管线与消防改造
+    if (opt.ebike) sFire -= 10;                                  // 电动车入户/楼道充电
+    if (opt.clutter) sFire -= 8;                                 // 楼道堆物
+    if (opt.stair2 === 'no') sFire -= (H >= 7 ? 9 : 5);          // 只有一部楼梯
+    if (opt.hydrant === 'no') sFire -= 7;
+    if (opt.burglarbar) sFire -= 5;                              // 防盗窗无逃生口
+    if (opt.gas === 'bottle') sFire -= 4;                        // 瓶装液化气
+    if (opt.partition) sFire -= 5;                               // 隔断房
+    if (opt.age != null && Number(opt.age) >= 30) sFire -= 6;
+    // 人员结构与疏散能力
+    if ((opt.elderly || opt.disabled) && H >= 7) sFire -= 6;
+    else if ((opt.elderly || opt.toddler) && H >= 12) sFire -= 3;
     sFire = clamp(sFire, 0, 100);
     ev.fire = [
-      '最近消防救援站：' + (nearest(poiBag.fire) ? nearest(poiBag.fire).name + '（' + fmtDist(nearest(poiBag.fire).distance) + '）' : '5 km 内未检索到'),
-      '最近可疏散开阔地：' + (nearest(poiBag.shelter) ? nearest(poiBag.shelter).name + '（' + fmtDist(nearest(poiBag.shelter).distance) + '）' : '未检索到'),
-      '楼层条件：' + (opt.basement ? '地下/半地下' : f != null ? f + ' 层' : '未填写') +
-        (f != null && f >= 19 ? '（属高层，云梯覆盖受限）' : '')
+      '最近消防救援站：' + (nf ? nf.name + '（' + distTxt(nf, R.fire) + '）' : '5 km 内未检索到'),
+      '最近可疏散开阔地：' + (nearest(poiBag.shelter) ? nearest(poiBag.shelter).name + '（' + distTxt(nearest(poiBag.shelter), R.shelter) + '）' : '未检索到'),
+      '楼层条件：' + (opt.basement ? '地下/半地下' : h.txt) +
+        (lv === 'high' ? '（属高层，云梯覆盖受限）' : lv === 'super' ? '（属超高层，主要靠内部疏散）' : ''),
+      '疏散与硬件：' + [
+        opt.stair2 === 'no' ? '仅一部楼梯' : opt.stair2 === 'yes' ? '有第二疏散楼梯' : '疏散楼梯未确认',
+        opt.hydrant === 'no' ? '无消火栓/烟感' : opt.hydrant === 'yes' ? '消火栓与烟感齐全' : '消防设施未确认'
+      ].join(' · ') + (opt.ebike ? ' · 存在电动车入户充电' : '')
     ];
 
     /* —— 断电韧性 —— */
@@ -143,41 +219,59 @@
       distScore(poiBag.convenience, [[200, 100], [500, 88], [1000, 76]], 48) * .26 +
       distScore(poiBag.pharmacy, [[200, 100], [500, 90], [1000, 78]], 52) * .12 +
       densityBonus(poiBag.convenience, 0.8, 4), 0, 100);
-    if (opt.noElevator && f != null && f >= 7) sPower -= 9;
-    if (opt.age && Number(opt.age) >= 30) sPower -= 5;
+    if (opt.elevator === 'none' && h.floor >= 7) sPower -= 9;
+    if (opt.elevator === 'flaky' && h.floor >= 7) sPower -= 5;
+    if (opt.age != null && Number(opt.age) >= 30) sPower -= 5;
     if (opt.basement) sPower -= 6;
+    if (opt.topfloor) sPower -= 3;          // 顶层：水压与电梯依赖
+    if (H >= 19) sPower -= 5;               // 二次供水依赖电
+    if (opt.device) sPower -= 8;            // 需电医疗设备，断电容忍度极低
+    if (opt.elderly || opt.toddler) sPower -= 3;
     sPower = clamp(sPower, 0, 100);
     ev.power = [
-      '最近采买点：' + (nearest(poiBag.supermarket) ? nearest(poiBag.supermarket).name + '（' + fmtDist(nearest(poiBag.supermarket).distance) + '）' : '未检索到'),
-      '生鲜/菜市场：' + (nearest(poiBag.market) ? fmtDist(nearest(poiBag.market).distance) : '未检索到'),
+      '最近采买点：' + (nearest(poiBag.supermarket) ? nearest(poiBag.supermarket).name + '（' + distTxt(nearest(poiBag.supermarket), R.supermarket) + '）' : '未检索到'),
+      '生鲜/菜市场：' + (nearest(poiBag.market) ? distTxt(nearest(poiBag.market), R.market) : '未检索到'),
       '便利店：' + (poiBag.convenience && poiBag.convenience.length
-        ? poiBag.convenience.length + ' 家，最近 ' + fmtDist(nearest(poiBag.convenience).distance)
-        : '未检索到')
+        ? poiBag.convenience.length + ' 家，最近 ' + distTxt(nearest(poiBag.convenience), R.convenience)
+        : '未检索到'),
+      '断电容忍：' + (opt.device ? '有需电医疗设备（制氧机/呼吸机/冷藏药品），停电风险被放大' :
+                     opt.elderly || opt.toddler ? '有老人或幼儿，对停水停电耐受更差' :
+                     H >= 19 ? '高层二次供水与电梯均依赖供电' : '常规耐受')
     ];
 
     /* —— 治安门禁 —— */
-    var doorScore = opt.door === 'yes' ? 88 : opt.door === 'no' ? 52 : 70;
+    var doorScore = { yes: 88, part: 72, no: 50, unk: 68 }[opt.door] || 68;
+    var camScore = { yes: 84, no: 56, unk: 70 }[opt.camera] || 70;
     var sSafe = clamp(
-      distScore(poiBag.police, [[600, 100], [1500, 84], [2500, 72]], 48) * .6 + doorScore * .4, 0, 100);
+      distScore(poiBag.police, [[600, 100], [1500, 84], [2500, 72]], 48) * .45 +
+      doorScore * .33 + camScore * .22, 0, 100);
     if (opt.share) sSafe -= 6;
-    if (f != null && f <= 2 && mode === 'rent') sSafe -= 5;
+    if (opt.partition) sSafe -= 4;
+    if (h.floor >= 1 && h.floor <= 2 && mode === 'rent') sSafe -= 5;   // 低层更易入室
+    if (opt.camera === 'no' && h.floor >= 1 && h.floor <= 3) sSafe -= 3;
     sSafe = clamp(sSafe, 0, 100);
     ev.safe = [
-      '最近警务资源：' + (nearest(poiBag.police) ? nearest(poiBag.police).name + '（' + fmtDist(nearest(poiBag.police).distance) + '）' : '3 km 内未检索到'),
-      '门禁/物业：' + (opt.door === 'yes' ? '有' : opt.door === 'no' ? '无' : '未填写（按平均水平计）'),
-      '居住形态：' + (opt.share ? '合租（人员流动大）' : '整租/自住')
+      '最近警务资源：' + (nearest(poiBag.police) ? nearest(poiBag.police).name + '（' + distTxt(nearest(poiBag.police), R.police) + '）' : '3 km 内未检索到'),
+      '门禁/物业：' + ({ yes: '有门禁和物业', part: '有门禁但管理一般', no: '基本没有', unk: '未填写（按平均水平计）' }[opt.door] || '未填写'),
+      '监控覆盖：' + ({ yes: '公共区域有监控', no: '基本无监控', unk: '未填写（按平均水平计）' }[opt.camera] || '未填写'),
+      '居住形态：' + (opt.partition ? '隔断/群租（人员复杂、消防分隔差）' : opt.share ? '合租（人员流动大）' : '整租/自住')
     ];
 
     /* —— 生活保障 —— */
+    var hasKid = opt.toddler || opt.child;
+    var wMetro = hasKid ? .30 : .34, wSchool = hasKid ? .28 : .18;
     var sLife = clamp(
-      distScore(poiBag.metro, [[600, 100], [1200, 88], [2000, 74]], 45) * .34 +
+      distScore(poiBag.metro, [[600, 100], [1200, 88], [2000, 74]], 45) * wMetro +
       distScore(poiBag.bus, [[200, 100], [400, 88], [700, 76]], 52) * .20 +
       distScore(poiBag.supermarket, [[400, 100], [800, 88], [1500, 76]], 48) * .26 +
-      distScore(poiBag.school, [[600, 100], [1200, 86], [2000, 74]], 52) * .20, 0, 100);
+      distScore(poiBag.school, [[600, 100], [1200, 86], [2000, 74]], 52) * wSchool, 0, 100);
+    if (opt.elevator === 'none' && h.floor >= 4) sLife -= 6;           // 日常上下楼成本
+    sLife = clamp(sLife, 0, 100);
     ev.life = [
-      '地铁：' + (nearest(poiBag.metro) ? nearest(poiBag.metro).name + '（' + fmtDist(nearest(poiBag.metro).distance) + '）' : '3 km 内未检索到'),
+      '地铁：' + (nearest(poiBag.metro) ? nearest(poiBag.metro).name + '（' + distTxt(nearest(poiBag.metro), R.metro) + '）' : '3 km 内未检索到'),
       '公交：' + (nearest(poiBag.bus) ? fmtDist(nearest(poiBag.bus).distance) : '未检索到'),
-      '中小学：' + (nearest(poiBag.school) ? nearest(poiBag.school).name + '（' + fmtDist(nearest(poiBag.school).distance) + '）' : '未检索到')
+      '中小学：' + (nearest(poiBag.school) ? nearest(poiBag.school).name + '（' + fmtDist(nearest(poiBag.school).distance) + '）' : '未检索到') +
+        (hasKid ? '（家中有幼儿，此项权重已上调）' : '')
     ];
 
     /* —— 环境风险（扣分制）—— */
@@ -193,10 +287,14 @@
     penalty(poiBag.substation, '变电站', 150, 400, 14);
     penalty(poiBag.refuse, '垃圾站/污水处理', 150, 400, 16);
     penalty(poiBag.funeral, '殡葬设施', 400, 1000, 10);
+    if (opt.flood) sEnv -= 10;                 // 曾发生内涝/积水
+    if (opt.basement) sEnv -= 4;               // 地下空间额外叠加
+    if (opt.topfloor && opt.age != null && Number(opt.age) >= 20) sEnv -= 3;  // 老房顶层渗漏
     sEnv = clamp(sEnv, 0, 100);
-    ev.env = envHits.length
-      ? envHits.map(function (h) { return h.label + '：' + h.name + '（' + fmtDist(h.distance) + '）'; })
-      : ['1.5 km 内未检索到加油站、变电站、垃圾站、殡葬等嫌恶设施'];
+    ev.env = (envHits.length
+      ? envHits.map(function (x) { return x.label + '：' + x.name + '（' + fmtDist(x.distance) + '）'; })
+      : ['1.5 km 内未检索到加油站、变电站、垃圾站、殡葬等嫌恶设施'])
+      .concat(opt.flood ? ['场地历史：该处曾发生内涝或积水（按你填写的信息计入）'] : []);
 
     S = { em: sEm, fire: sFire, power: sPower, safe: sSafe, life: sLife, env: sEnv };
 
@@ -215,7 +313,10 @@
 
     /* —— 排序找出亮点与短板 —— */
     var arr = DIMS.map(function (d) {
-      return { id: d.id, name: d.name, score: round(S[d.id]), weight: W[d.id], evidences: ev[d.id], desc: d.desc };
+      return {
+        id: d.id, name: d.name, score: round(S[d.id]),
+        weight: Math.round(W[d.id] * 100), evidences: ev[d.id], desc: d.desc
+      };
     });
     var sorted = arr.slice().sort(function (a, b) { return b.score - a.score; });
     var highlights = sorted.slice(0, 2).map(function (x) { return x.name + ' ' + x.score + ' 分'; });
@@ -223,67 +324,155 @@
 
     /* —— 风险项 —— */
     var risks = [];
-    var nm = nearest(useBig), nf = nearest(poiBag.fire);
-    if (!nm || nm.distance > 3000) risks.push({ lv: 'warn', t: '医疗距离偏远', d: '最近医疗机构超过 3 km，突发疾病时送医时间不可控，家中有老人小孩尤其要谨慎。' });
-    if (!nf || nf.distance > 4000) risks.push({ lv: 'dan', t: '消防站覆盖弱', d: '最近消防救援站超过 4 km，高层住宅火灾主要依赖内部消防设施与自救，务必现场确认消火栓、烟感与疏散通道。' });
-    if (f != null && f >= 19 && (!nf || nf.distance > 2500)) risks.push({ lv: 'dan', t: '高层 + 消防距离', d: f + ' 层超出多数举高消防车作业高度，疏散只能靠楼梯间，请确认楼梯间是否为防烟楼梯间、有无堆放杂物。' });
-    if (!(poiBag.convenience || []).length) risks.push({ lv: 'warn', t: '断电后补给困难', d: '1.5 km 内没有便利店，长时间停电时缺少就近补给点，建议常备 3 天量的水与即食食品。' });
-    if (opt.basement) risks.push({ lv: 'dan', t: '地下空间内涝与排烟', d: '地下/半地下在暴雨内涝与火灾排烟上风险显著高于地面，需确认排水泵、挡水板与机械排烟。' });
-    if (opt.age && Number(opt.age) >= 30) risks.push({ lv: 'warn', t: '房龄偏老', d: '建成约 ' + opt.age + ' 年，重点关注供电容量、给排水管锈蚀、燃气软管与外墙保温层。' });
-    if (opt.share) risks.push({ lv: 'warn', t: '合租安全边界', d: '合租需确认门锁是否可反锁、插座与大功率电器使用规则、陌生人进出管理。' });
-    envHits.forEach(function (h) {
-      if (h.distance <= (h.label === '殡葬设施' ? 400 : 150)) risks.push({ lv: 'warn', t: '嫌恶设施过近', d: h.label + '「' + h.name + '」距目标约 ' + fmtDist(h.distance) + '，可能影响居住体验与资产估值。' });
+    function risk(lv, t, d) { risks.push({ lv: lv, t: t, d: d }); }
+
+    if (opt.ebike) risk('dan', '电动车入户或楼道充电', '这是近年住宅火灾最常见也最致命的成因。要求必须在室外集中充电棚充电，楼道内严禁私拉电线；若小区没有充电设施，需把这一项列为否决项。');
+    if (opt.clutter) risk('dan', '楼道/消防通道堆物', '火灾时唯一可用的逃生通道被占用，等于把逃生时间让给了杂物。看房当天拍下照片，签约前要求清理并写入合同。');
+    if (opt.stair2 === 'no' && H >= 7) risk('dan', '只有一部疏散楼梯', '7 层以上仅一部楼梯，一旦被烟火封堵就无替代路径。务必现场确认楼梯间是否为防烟楼梯间、门是否常闭。');
+    if (opt.hydrant === 'no') risk(H >= 12 ? 'dan' : 'warn', '消火栓或烟感缺失', '高层住宅火灾前十分钟主要靠建筑自身设施。打开消火栓箱确认水带水枪齐全、有水压，并查看走廊烟感是否在位。');
+    if (opt.burglarbar) risk('warn', '防盗窗无逃生口', '全封闭防盗窗在火灾时会把自己困住。要求改造为带逃生口（不小于 1.0×0.8 m）且可从内部开启的款式，钥匙挂在固定位置。');
+    if (opt.device) risk('dan', '家中有需电医疗设备', '制氧机、呼吸机、胰岛素冷藏一旦断电即构成直接健康风险。需准备 UPS 或大容量储能、车载逆变器，并提前向社区/物业报备，确认最近有保障电源的公共场所。');
+    if (opt.disabled && H >= 7) risk('dan', '行动不便者住高层', '电梯停运时无法自行上下楼，是疏散场景中最难处置的一类。强烈建议改选 3 层以下，或确认有可协助疏散的邻里/物业机制。');
+    else if (opt.elderly && H >= 12) risk('warn', '老人住高层', '断电后电梯停运、二次供水中断，老人上下楼与取水都成问题。优先低层，或把必需物资与常用药集中备在住所内。');
+    if (opt.flood) risk('dan', '发生过内涝或积水', '暴雨时首层与地下空间最先受损。确认地下车库挡水板与排水泵是否可用，车辆停放位置，以及是否购买过涉水险。');
+    if (opt.gas === 'bottle') risk('warn', '使用瓶装液化气', '瓶装气泄漏与爆燃风险高于管道天然气。确认钢瓶检验期、软管不超过 2 米且未老化，并加装燃气报警器。');
+    if (opt.partition) risk('warn', '隔断房 / 群租', '隔断改变了原有防火分隔与疏散路径，且人员流动大。这类房源在很多城市本身属于违规，签约前先确认是否被要求整改过。');
+    if (opt.camera === 'no') risk('warn', '公共区域无监控', '缺少监控时，入室盗窃与纠纷取证都靠运气。低层住户建议自行加装门口摄像头并升级门锁。');
+    if (opt.topfloor) risk('warn', '顶层漏水与水压', '顶层是渗漏与夏季高温的高发位置，停水时水压也最先断。重点看屋面防水层年份、天花板水渍与顶层隔热。');
+    if (opt.elevator === 'flaky' && h.floor >= 7) risk('warn', '电梯经常故障', '高层日常与紧急疏散都依赖电梯，频繁困人说明维保不到位。要求查看最近一次年检标志与维保记录。');
+
+    if (!nm || nm.distance > 3000) risk('warn', '医疗距离偏远', '最近医疗机构超过 3 km，突发疾病时送医时间不可控，家中有老人小孩尤其要谨慎。');
+    if (opt.elderly && nm && nm.distance > 2000) risk('warn', '老人就医距离偏长', '最近医院 ' + fmtDist(nm.distance) + '，老人突发状况时每一分钟都很关键。建议确认社区医生上门服务与 120 响应时间。');
+    if (!nf || nf.distance > 4000) risk('dan', '消防站覆盖弱', '最近消防救援站超过 4 km，高层住宅火灾主要依赖内部消防设施与自救，务必现场确认消火栓、烟感与疏散通道。');
+    if (lv === 'high' && (!nf || nf.distance > 2500)) risk('dan', '高层 + 消防距离', H + ' 层超出多数举高消防车作业高度，疏散只能靠楼梯间，请确认楼梯间是否为防烟楼梯间、有无堆放杂物。');
+    if (!(poiBag.convenience || []).length) risk('warn', '断电后补给困难', '1.5 km 内没有便利店，长时间停电时缺少就近补给点，建议常备 3 天量的水与即食食品。');
+    if (opt.basement) risk('dan', '地下空间内涝与排烟', '地下/半地下在暴雨内涝与火灾排烟上风险显著高于地面，需确认排水泵、挡水板与机械排烟。');
+    if (opt.age != null && Number(opt.age) >= 30) risk('warn', '房龄偏老', '建成约 ' + opt.age + ' 年，重点关注供电容量、给排水管锈蚀、燃气软管与外墙保温层。');
+    if (opt.share) risk('warn', '合租安全边界', '合租需确认门锁是否可反锁、插座与大功率电器使用规则、陌生人进出管理。');
+    envHits.forEach(function (x) {
+      if (x.distance <= (x.label === '殡葬设施' ? 400 : 150)) risk('warn', '嫌恶设施过近', x.label + '「' + x.name + '」距目标约 ' + fmtDist(x.distance) + '，可能影响居住体验与资产估值。');
     });
-    if (!risks.length) risks.push({ lv: 'ok', t: '未发现显著硬伤', d: '关键保障资源齐备，按下方清单做常规核实即可。' });
+    if (!risks.length) risk('ok', '未发现显著硬伤', '关键保障资源齐备，按下方清单做常规核实即可。');
+
+    /* —— 补充信息对评分的影响（透明化） —— */
+    var notes = [];
+    function note(s) { if (s) notes.push(s); }
+    if (lv === 'mid') note('楼栋约 ' + H + ' 层：消防安全 −4 分，消防权重小幅上调');
+    if (lv === 'high') note('高层（约 ' + H + ' 层）：消防安全 −8 分，消防权重上调，云梯覆盖受限');
+    if (lv === 'super') note('超高层：消防安全 −13 分，消防权重显著上调，断电韧性 −5 分（二次供水）');
+    if (opt.basement) note('地下/半地下：消防 −8、断电 −6、环境 −4');
+    if (opt.topfloor) note('顶层：断电韧性 −3（水压与电梯依赖）');
+    if (opt.ebike) note('电动车入户/楼道充电：消防安全 −10');
+    if (opt.clutter) note('楼道堆物：消防安全 −8');
+    if (opt.stair2 === 'no') note('仅一部疏散楼梯：消防安全 −' + (H >= 7 ? 9 : 5));
+    if (opt.hydrant === 'no') note('消火栓/烟感缺失：消防安全 −7');
+    if (opt.burglarbar) note('防盗窗无逃生口：消防安全 −5');
+    if (opt.gas === 'bottle') note('瓶装液化气：消防安全 −4');
+    if (opt.partition) note('隔断/群租：消防 −5、治安 −4');
+    if (opt.share) note('合租：治安门禁 −6');
+    if (opt.camera === 'no') note('无监控：治安门禁按低分计入');
+    if (opt.elevator === 'none' && h.floor >= 7) note('无电梯且住在 ' + h.floor + ' 层：断电韧性 −9、生活保障 −6');
+    if (opt.elevator === 'flaky' && h.floor >= 7) note('电梯常故障且住在 ' + h.floor + ' 层：断电韧性 −5');
+    if (opt.device) note('需电医疗设备：断电韧性 −8，医疗与断电权重同时上调');
+    if (opt.elderly || opt.toddler) note('家中有老人/幼儿：医疗权重上调，断电韧性 −3');
+    if (opt.disabled && H >= 7) note('行动不便者住 ' + H + ' 层：消防安全额外 −6，消防权重再上调');
+    if (opt.flood) note('曾发生内涝：环境风险 −10，环境权重上调');
+    if (opt.age != null && Number(opt.age) >= 30) note('房龄约 ' + opt.age + ' 年：消防 −6、断电 −5');
 
     /* —— 清单 —— */
-    var p72 = buildPower72(poiBag, opt);
-    var visit = buildVisit(mode, opt, poiBag);
+    var p72 = buildPower72(poiBag, opt, R, h);
+    var visit = buildVisit(mode, opt, poiBag, R, h);
+
+    function withRoute(p, r) {
+      if (!p) return null;
+      var o = {};
+      for (var k in p) o[k] = p[k];
+      o.route = r || null;
+      return o;
+    }
 
     return {
       mode: mode, score: total, grade: grade, gradeTxt: GRADE_TXT[grade],
       dims: arr, highlights: highlights, gaps: gaps, risks: risks,
-      envHits: envHits, power72: p72, visit: visit,
+      envHits: envHits, power72: p72, visit: visit, weight: W, env: opt, notes: notes,
       facts: {
-        med: nm, fire: nf, shelter: nearest(poiBag.shelter),
-        market: nearest(poiBag.market),
-        supermarket: nearest(poiBag.supermarket),
-        convenience: nearest(poiBag.convenience),
-        metro: nearest(poiBag.metro),
-        police: nearest(poiBag.police),
-        pharmacy: nearest(poiBag.pharmacy)
+        med: withRoute(nm, R.med),
+        fire: withRoute(nf, R.fire),
+        shelter: withRoute(nearest(poiBag.shelter), R.shelter),
+        market: withRoute(nearest(poiBag.market), R.market),
+        supermarket: withRoute(nearest(poiBag.supermarket), R.supermarket),
+        convenience: withRoute(nearest(poiBag.convenience), R.convenience),
+        metro: withRoute(nearest(poiBag.metro), R.metro),
+        police: withRoute(nearest(poiBag.police), R.police),
+        pharmacy: withRoute(nearest(poiBag.pharmacy), R.pharmacy)
       },
       poiBag: poiBag
     };
   }
 
   /* ---------------- 断电 72 小时清单 ---------------- */
-  function buildPower72(poi, opt) {
+  function buildPower72(poi, opt, R, h) {
     var L = [];
-    var f = opt.floor == null ? null : Number(opt.floor);
+    var H = h.H;
+
     L.push({
       t: '储水：按每人每天 3 升备足 3 天',
-      s: '电梯停运时高层取水极困难，优先备在住所内而非楼下'
+      s: H >= 19 ? '高层靠二次供水泵，停电即停水，务必把水备在住所内而非楼下' : '电梯停运时高层取水极困难，优先备在住所内'
     });
     L.push({
       t: '照明与通信：手电 / 头灯 + 充电宝（≥20000mAh）+ 收音机',
       s: '手机是唯一信息源，关掉非必要后台，只保留通讯与地图'
     });
-    if (f != null && f >= 7) {
+
+    if (opt.device) {
       L.push({
-        t: '高层预案：提前确认楼梯间位置与是否可自然采光',
-        s: opt.noElevator ? '无电梯，' + f + ' 层上下一趟体力消耗大，把重物提前分批次备好' : '电梯大概率停运，把必需物品集中在住所内'
+        t: '生命支持电源：UPS 或储能电源 + 车载逆变器，至少覆盖设备 8 小时',
+        s: '提前向社区/物业报备「有需电医疗设备」，问清应急发电机接口或就近可充电的公共场所'
       });
     }
+    if (opt.elderly) {
+      L.push({
+        t: '老人专项：常用药备满 7 天量 + 保暖衣物 + 纸质紧急联系人卡',
+        s: '老人对停暖停水耐受差，提前联系邻居或物业约定每日照看'
+      });
+    }
+    if (opt.toddler) {
+      L.push({
+        t: '婴幼儿专项：奶粉、即饮热水、纸尿裤、常用退烧药各备 3 天量',
+        s: '断电后无法烧水，优先准备不需加热的即食型辅食与常温水'
+      });
+    }
+    if (opt.pet) {
+      L.push({ t: '宠物：3 天量的粮与水 + 便携猫砂/尿垫', s: '断电后宠物医院多半停诊，外伤与常备药提前备一份' });
+    }
+    if (H >= 7) {
+      L.push({
+        t: '高层预案：提前确认楼梯间位置、是否可自然采光',
+        s: opt.elevator === 'none' ? '无电梯，' + h.floor + ' 层上下一趟体力消耗大，把重物提前分批次备好'
+          : opt.elevator === 'flaky' ? '电梯本就常故障，别把必需物资放在依赖电梯的位置'
+          : '电梯大概率停运，把必需物品集中在住所内'
+      });
+    }
+    if (opt.flood || opt.basement) {
+      L.push({
+        t: '防水：挡水板 / 沙袋 + 重要物品上移 + 车辆提前转移至高处',
+        s: '暴雨预警发出后应立刻执行，地下与首层的反应窗口通常只有几十分钟'
+      });
+    }
+
     var m = nearest(poi.market), s = nearest(poi.supermarket), c = nearest(poi.convenience);
     var near = [s, m, c].filter(Boolean).sort(function (a, b) { return a.distance - b.distance; })[0];
+    var rid = near === s ? 'supermarket' : near === m ? 'market' : 'convenience';
+    var rt = R && R[rid];
     L.push({
-      t: '补给点：' + (near ? near.name + '（' + fmtDist(near.distance) + '，步行约 ' + Math.max(1, Math.round(near.distance / 80)) + ' 分钟）' : '附近未检索到稳定补给点'),
-      s: '断电后多数门店只能现金交易，常备 200–500 元现金零钱'
+      t: '补给点：' + (near ? near.name + '（' + (rt ? routeTxt(rt) + '，实测路网距离'
+          : '直线 ' + fmtDist(near.distance) + '，按路网折算约 ' + Math.max(1, Math.round(near.distance / 80 * 1.25)) + ' 分钟') + '）'
+          : '附近未检索到稳定补给点'),
+      s: rt ? '以上为高德实际步行路径，非直线距离换算' : '未取到实际路径，此处的分钟数为直线距离按路网系数折算的估值'
     });
     L.push({
       t: '药品：退烧、止泻、抗过敏、创可贴、慢性病用药各备一份',
-      s: '最近药店：' + (nearest(poi.pharmacy) ? nearest(poi.pharmacy).name + '（' + fmtDist(nearest(poi.pharmacy).distance) + '）' : '未检索到，需自行常备')
+      s: '最近药店：' + (nearest(poi.pharmacy) ? nearest(poi.pharmacy).name + '（' + distTxt(nearest(poi.pharmacy), R && R.pharmacy) + '）' : '未检索到，需自行常备')
     });
     L.push({
       t: '食物：3 天量的即食食品（压缩饼干、罐头、能量棒）',
@@ -297,15 +486,53 @@
   }
 
   /* ---------------- 看房/签约确认清单 ---------------- */
-  function buildVisit(mode, opt, poi) {
+  function buildVisit(mode, opt, poi, R, h) {
     var L = [];
     L.push({ t: '夜间走一遍：楼梯间照明、楼道堆物、单元门禁是否常闭', s: '消防通道被占用是老小区最常见的硬伤' });
     L.push({ t: '确认水电燃气：电表容量、燃气软管年限、是否有漏水痕迹', s: '重点看厨卫天花板与外墙内渗水' });
     L.push({ t: '问清物业与停车：物业公司名称、响应时间、车位是否固定', s: '无物业或无门禁的小区，治安维度需自行加权' });
-    L.push({ t: '实测通勤：工作日早高峰从门口走到最近地铁站', s: poi.metro && poi.metro.length ? '最近：' + poi.metro[0].name + '（' + fmtDist(poi.metro[0].distance) + '）' : '附近无地铁，需依赖公交或自驾' });
+    L.push({ t: '实测通勤：工作日早高峰从门口走到最近地铁站', s: poi.metro && poi.metro.length ? '最近：' + poi.metro[0].name + '（' + distTxt(poi.metro[0], R && R.metro) + '）' : '附近无地铁，需依赖公交或自驾' });
     L.push({ t: '手机信号与电梯：进电梯和地下车库试通话', s: '被困时能否求救取决于这一项' });
     L.push({ t: '查看窗外：是否正对变电站、垃圾站、铁路或主干道', s: '白天看房容易忽略噪音与异味' });
     L.push({ t: '问邻居或保安：近两年是否发生过内涝、停电、入室盗窃', s: '本地经验比任何数据都准' });
+
+    // —— 消防专项 ——
+    if (opt.hydrant !== 'yes') {
+      L.push({ t: '打开消火栓箱看一眼：水带水枪是否齐全、有没有水压表读数', s: '顺便按下手动报警按钮，问物业消防控制室多久能确认' });
+    }
+    if (opt.stair2 !== 'yes') {
+      L.push({ t: '从所在楼层走楼梯到地面一次，数一下有几部楼梯、防火门是否常闭', s: '只有一部楼梯的高层，把这一条当作一票否决项' });
+    }
+    if (opt.ebike) {
+      L.push({ t: '看电动自行车管理：有无室外集中充电棚，楼道内有无私拉电线', s: '有集中充电棚的小区可显著降低火灾风险' });
+    }
+    if (opt.burglarbar) {
+      L.push({ t: '确认防盗窗是否有逃生口、能否从内部徒手打开', s: '逃生口不小于 1.0×0.8 m，钥匙要挂在全家都知道的固定位置' });
+    }
+    if (opt.gas === 'bottle' || opt.gas === 'unk') {
+      L.push({ t: '燃气细节：软管是否超过 2 米、有无老化开裂、是否装了燃气报警器', s: '软管建议两年一换，报警器几十块钱能救命' });
+    }
+    if (opt.elevator !== 'ok') {
+      L.push({ t: '看电梯：年检标志有效期、维保单位、最近一次困人记录', s: '问物业电梯是否接双电源，停电时是否有平层装置' });
+    }
+
+    // —— 人员结构专项 ——
+    if (opt.elderly || opt.disabled) {
+      L.push({ t: '无障碍核查：单元门门槛高度、有无坡道、电梯轿厢能否进轮椅', s: '同时确认社区医生上门服务与 120 到该小区的平均时间' });
+    }
+    if (opt.toddler) {
+      L.push({ t: '有幼儿要额外看：阳台栏杆间距、窗户限位器、桌角与插座保护', s: '坠落与触电是幼儿居家最常见的事故' });
+    }
+    if (opt.device) {
+      L.push({ t: '问物业是否配备应急发电机、能否为医疗设备提供临时供电接口', s: '把「有需电医疗设备」写进租赁合同或物业登记，突发停电时会被优先处理' });
+    }
+    if (opt.flood) {
+      L.push({ t: '看防汛：地下车库入口挡水板、排水泵是否可用、有无防汛沙袋', s: '问清历史上最深的一次积水到什么位置' });
+    }
+    if (opt.topfloor) {
+      L.push({ t: '顶层防水：看屋面防水层年份、天花板与墙角有无水渍', s: '雨季看房最能暴露顶层渗漏问题' });
+    }
+
     if (mode === 'rent') {
       L.push({ t: '核实房东与合同：房产证、身份证、租期与押金退还条款', s: '拒绝年付与高额定金' });
       L.push({ t: '确认合租现状：现住人数、性别构成、公共区域使用规则', s: '合租纠纷多源于公共区域' });
@@ -321,6 +548,7 @@
   RS.model = {
     QUERIES: QUERIES, DIMS: DIMS, WEIGHT: WEIGHT,
     evaluate: evaluate, fmtDist: fmtDist, haversine: haversine,
+    routeTxt: routeTxt, distTxt: distTxt, resolveHeight: resolveHeight,
     scoreColor: scoreColor, clamp: clamp
   };
 })();
