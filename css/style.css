@@ -94,6 +94,10 @@ input:focus,select:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0
 
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:34px 0 10px}
 .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+/* 雷达图那一行：左列固定宽放图，右列放六维卡片。
+   写成 class 而不是内联样式，窄屏时才能被下面的媒体查询打回单列。 */
+.radar-row{grid-template-columns:330px 1fr;align-items:center;gap:20px}
+.dims.dims-2{grid-template-columns:repeat(2,1fr);margin:0}
 .feat h4{font-size:16px;margin-bottom:6px}
 .feat p{color:var(--ink-2);font-size:14px}
 .bullets{margin:10px 0 0;padding-left:18px;color:var(--ink-2);font-size:14px}
@@ -108,7 +112,7 @@ input:focus,select:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0
 @media(max-width:1020px){
   .work{grid-template-columns:1fr}
   .side{position:static}
-  .grid3,.grid2{grid-template-columns:1fr}
+  .grid3,.grid2,.radar-row{grid-template-columns:1fr}
   .hero h1{font-size:30px}
 }
 
@@ -187,6 +191,8 @@ details.opt .body{padding:4px 14px 14px}
 
 .dims{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:18px}
 @media(max-width:760px){.dims{grid-template-columns:repeat(2,1fr)}}
+/* 手机窄屏：报告页的六维卡片单列更好读 */
+@media(max-width:560px){.dims.dims-2{grid-template-columns:1fr}}
 .dim{border:1px solid var(--line);border-radius:12px;padding:13px 15px;background:#fff}
 .dim .dh{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}
 .dim .dn{font-weight:650;font-size:14px}
@@ -242,5 +248,7 @@ table.poi td.d{text-align:right;font-variant-numeric:tabular-nums;white-space:no
   .card{box-shadow:none;border-color:#d7dce2;break-inside:avoid;page-break-inside:avoid;margin-bottom:14px}
   .verdict{grid-template-columns:150px 1fr}
   .dims{grid-template-columns:repeat(3,1fr)}
+  /* 报告页的六维卡片在屏幕上就是 2 列，打印时也保持 2 列 */
+  .dims.dims-2{grid-template-columns:repeat(2,1fr)}
   @page{margin:14mm}
 }

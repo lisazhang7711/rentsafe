@@ -26,9 +26,12 @@
     );
   }
 
-  /* 六维雷达图 */
+  /* 六维雷达图
+   * 画布比图形大一圈（viewBox 带负偏移），否则左右四个角的标签会被 overflow 裁掉。
+   * 侧边角标签排两行（名字一行、分数一行），横向只占 4 个字的宽度，
+   * 这样图形本体 R 仍可保持在 110，不必为了塞标签把雷达缩得很小。 */
   function radar(dims) {
-    var size = 300, cx = size / 2, cy = size / 2, R = 108;
+    var size = 300, cx = size / 2, cy = size / 2, R = 110, LR = R + 18;
     var n = dims.length, i, a, x, y;
     function pt(idx, r) {
       var ang = -Math.PI / 2 + (idx * 2 * Math.PI) / n;
@@ -54,12 +57,25 @@
     g += dots;
     var labels = '';
     for (i = 0; i < n; i++) {
-      var pl = pt(i, R + 24);
-      var anchor = Math.abs(pl[0] - cx) < 8 ? 'middle' : pl[0] > cx ? 'start' : 'end';
-      labels += '<text x="' + pl[0].toFixed(1) + '" y="' + (pl[1] + 4).toFixed(1) + '" text-anchor="' + anchor +
-        '" font-size="12.5" fill="#4a5563">' + esc(dims[i].name) + ' <tspan fill="#1b2027" font-weight="650">' + dims[i].score + '</tspan></text>';
+      var pl = pt(i, LR);
+      var side = Math.abs(pl[0] - cx) >= 8;   // 正上/正下以外的四个角
+      var anchor = side ? (pl[0] > cx ? 'start' : 'end') : 'middle';
+      // 白色描边垫底，避免标签压在网格线上看不清
+      var attr = 'text-anchor="' + anchor + '" font-size="12.5" fill="#4a5563" ' +
+        'paint-order="stroke" stroke="#fff" stroke-width="3" stroke-linejoin="round"';
+      if (side) {
+        // 两行：名字在上、分数在下，横向只占名字宽度
+        labels += '<text x="' + pl[0].toFixed(1) + '" y="' + (pl[1] - 3).toFixed(1) + '" ' + attr + '>' +
+          esc(dims[i].name) + '</text>' +
+          '<text x="' + pl[0].toFixed(1) + '" y="' + (pl[1] + 12).toFixed(1) + '" ' + attr + '>' +
+          '<tspan fill="#1b2027" font-weight="650">' + dims[i].score + '</tspan></text>';
+      } else {
+        labels += '<text x="' + pl[0].toFixed(1) + '" y="' + (pl[1] + 4).toFixed(1) + '" ' + attr + '>' +
+          esc(dims[i].name) + ' <tspan fill="#1b2027" font-weight="650">' + dims[i].score + '</tspan></text>';
+      }
     }
-    return '<svg viewBox="0 0 ' + size + ' ' + size + '" width="100%" style="max-width:320px;display:block;margin:0 auto">' + g + labels + '</svg>';
+    return '<svg viewBox="-14 -16 330 310" width="100%" ' +
+      'style="max-width:330px;display:block;margin:0 auto;overflow:visible">' + g + labels + '</svg>';
   }
 
   /* 关键点位表：直线距离 与 实际路网距离/耗时 分列 */
@@ -147,9 +163,9 @@
       /* 雷达 + 维度 */
       '<section class="card pad" style="margin-bottom:16px">' +
         '<div class="sec-t">六维安全结构</div>' +
-        '<div class="grid2" style="grid-template-columns:330px 1fr;align-items:center;gap:20px">' +
+        '<div class="grid2 radar-row">' +
           '<div>' + radar(res.dims) + '</div>' +
-          '<div class="dims" style="grid-template-columns:repeat(2,1fr);margin:0">' + dimHtml + '</div>' +
+          '<div class="dims dims-2">' + dimHtml + '</div>' +
         '</div>' +
       '</section>' +
 
