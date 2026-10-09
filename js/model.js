@@ -36,6 +36,10 @@
     { id: 'funeral',      label: '殡仪馆',          kw: '殡仪馆',             radius: 3000 }
   ];
 
+  /* 检索半径是分级配置的（消防 6 km、医院 5 km、地铁/公园 3 km、便利店 1.5 km、公交 1 km），
+   * 对外统一说「3 公里」是不准确的，文案一律引用这个常量 */
+  var RADIUS_TXT = '分级检索：公交 1 km、便利店与加油站 1.5 km、超市与菜场 2 km、公园与地铁 3 km、医院 5 km、消防 6 km';
+
   // 医疗类噪声：口腔、宠物、美容、门诊等不算可用的综合医疗资源
   var MED_NOISE = /口腔|牙科|宠物|美容|整形|视力|眼镜|体检中心|不孕|男科|中医馆|推拿|按摩/;
 
@@ -104,8 +108,27 @@
   }
   // 基层机构不算「医院」：社区卫生服务中心、卫生院、服务站只作补充
   var MED_BASIC = /社区卫生服务中心|卫生院|服务站|卫生室|门诊/;
+  // 注：不要把「中医」算作综合医院的判定词——中医院与综合医院的急诊/手术能力不同，
+  // 混在一起会出现「综合医院一栏写着中医院」这种误导。中医院按普通医疗机构参与评分。
+  var BIG_HOSPITAL = /三甲|三级|人民|大学|附属|协和|同济|省立|市立|中心|妇幼|急救|医学院/;
   function isBigHospital(name) {
-    return /三甲|三级|人民|大学|附属|协和|同济|省立|市立|中心|中医|妇幼/.test(name || '');
+    return BIG_HOSPITAL.test(name || '');
+  }
+
+  /**
+   * 医院筛选链：去噪声 -> 去基层机构 -> 优先综合医院。
+   * 报告里展示的「最近医院」和路径规划的目标点都走这个函数，保证两者是同一家。
+   */
+  function medChain(bag) {
+    var med = (bag.medical || []).filter(function (p) { return !MED_NOISE.test(p.name); });
+    var hosp = med.filter(function (p) { return !MED_BASIC.test(p.name); });
+    var useMed = hosp.length ? hosp : med;
+    var bigMed = useMed.filter(function (p) { return isBigHospital(p.name); });
+    return bigMed.length ? bigMed : useMed;      // 已按 distance 升序
+  }
+  function pickMed(bag) {
+    var l = medChain(bag);
+    return l.length ? l[0] : null;
   }
 
   /* ---------------- 楼栋高度解析 ---------------- */
@@ -148,30 +171,30 @@
   /* ---------------- 主评估 ---------------- */
   function evaluate(poiBag, opt) {
     opt = opt || {};
-    var mode = opt.mode || 'rent';
+    // mode 只认两种口径，非法值（?mode=xxx）会让权重表变成 undefined，
+    // 总分恒为 0、等级 D、权重列显示 NaN —— 这里直接兜住
+    var mode = (opt.mode === 'buy') ? 'buy' : 'rent';
     var R = opt.routes || {};
     var h = resolveHeight(opt), H = h.H, lv = h.lv;
     var W = buildWeight(mode, opt, h);
     var ev = {}, S = {};
 
     /* —— 应急医疗 —— */
-    var med = (poiBag.medical || []).filter(function (p) { return !MED_NOISE.test(p.name); });
-    var hosp = med.filter(function (p) { return !MED_BASIC.test(p.name); });
-    var useMed = hosp.length ? hosp : med;
-    var bigMed = useMed.filter(function (p) { return isBigHospital(p.name); });
-    var useBig = bigMed.length ? bigMed : useMed;
-    var nm = nearest(useBig);
+    var useBig = medChain(poiBag);
+    var nm = useBig.length ? useBig[0] : null;
     var medBase = distScore(useBig, [[600, 100], [1200, 88], [2500, 74], [4000, 60]], 40);
-    var sEm = clamp(medBase * .55 +
+    // 数量加成单独加在 95 分封顶之外：否则距离分打满时加成被 clamp 吃掉，
+    // 两个条件不同的小区都是 100 分，密度这一项就完全失去区分度
+    var sEm = clamp(clamp(medBase * .55 +
                     distScore(poiBag.clinic, [[500, 100], [1000, 90], [1800, 78]], 52) * .25 +
-                    distScore(poiBag.pharmacy, [[200, 100], [500, 90], [1000, 78]], 55) * .20 +
+                    distScore(poiBag.pharmacy, [[200, 100], [500, 90], [1000, 78]], 55) * .20, 0, 95) +
                     densityBonus(poiBag.pharmacy, 1.0, 5), 0, 100);
     // 家中有老人 / 需电设备 / 幼儿时，医院远一点更致命
     if ((opt.elderly || opt.device) && nm && nm.distance > 2000) sEm -= 6;
     if (opt.toddler && nm && nm.distance > 3000) sEm -= 4;
     sEm = clamp(sEm, 0, 100);
     ev.em = [
-      '最近医院：' + (nm ? nm.name + '（' + distTxt(nm, R.med) + '）' : '3 km 内未检索到'),
+      '最近医院：' + (nm ? nm.name + '（' + distTxt(nm, R.med) + '）' : '5 km 内未检索到'),
       '社区卫生服务中心：' + (nearest(poiBag.clinic) ? fmtDist(nearest(poiBag.clinic).distance) : '未检索到'),
       '药店：' + (poiBag.pharmacy && poiBag.pharmacy.length
         ? poiBag.pharmacy.length + ' 家，最近 ' + distTxt(nearest(poiBag.pharmacy), R.pharmacy)
@@ -213,11 +236,12 @@
     ];
 
     /* —— 断电韧性 —— */
-    var sPower = clamp(
+    // 同上：便利店密度加成单独加，避免 100 分封顶后被打平
+    var sPower = clamp(clamp(
       distScore(poiBag.supermarket, [[400, 100], [800, 88], [1500, 76]], 50) * .34 +
       distScore(poiBag.market, [[500, 100], [1000, 88], [1800, 75]], 48) * .28 +
       distScore(poiBag.convenience, [[200, 100], [500, 88], [1000, 76]], 48) * .26 +
-      distScore(poiBag.pharmacy, [[200, 100], [500, 90], [1000, 78]], 52) * .12 +
+      distScore(poiBag.pharmacy, [[200, 100], [500, 90], [1000, 78]], 52) * .12, 0, 96) +
       densityBonus(poiBag.convenience, 0.8, 4), 0, 100);
     if (opt.elevator === 'none' && h.floor >= 7) sPower -= 9;
     if (opt.elevator === 'flaky' && h.floor >= 7) sPower -= 5;
@@ -344,7 +368,9 @@
     if (!nm || nm.distance > 3000) risk('warn', '医疗距离偏远', '最近医疗机构超过 3 km，突发疾病时送医时间不可控，家中有老人小孩尤其要谨慎。');
     if (opt.elderly && nm && nm.distance > 2000) risk('warn', '老人就医距离偏长', '最近医院 ' + fmtDist(nm.distance) + '，老人突发状况时每一分钟都很关键。建议确认社区医生上门服务与 120 响应时间。');
     if (!nf || nf.distance > 4000) risk('dan', '消防站覆盖弱', '最近消防救援站超过 4 km，高层住宅火灾主要依赖内部消防设施与自救，务必现场确认消火栓、烟感与疏散通道。');
-    if (lv === 'high' && (!nf || nf.distance > 2500)) risk('dan', '高层 + 消防距离', H + ' 层超出多数举高消防车作业高度，疏散只能靠楼梯间，请确认楼梯间是否为防烟楼梯间、有无堆放杂物。');
+    // 高层和超高层都要判（原来只写了 high，34 层以上的 super 反而漏掉了）
+    if ((lv === 'high' || lv === 'super') && (!nf || nf.distance > 2500))
+      risk('dan', '高层 + 消防距离', H + ' 层超出多数举高消防车作业高度，疏散只能靠楼梯间，请确认楼梯间是否为防烟楼梯间、有无堆放杂物。');
     if (!(poiBag.convenience || []).length) risk('warn', '断电后补给困难', '1.5 km 内没有便利店，长时间停电时缺少就近补给点，建议常备 3 天量的水与即食食品。');
     if (opt.basement) risk('dan', '地下空间内涝与排烟', '地下/半地下在暴雨内涝与火灾排烟上风险显著高于地面，需确认排水泵、挡水板与机械排烟。');
     if (opt.age != null && Number(opt.age) >= 30) risk('warn', '房龄偏老', '建成约 ' + opt.age + ' 年，重点关注供电容量、给排水管锈蚀、燃气软管与外墙保温层。');
@@ -546,9 +572,10 @@
   }
 
   RS.model = {
-    QUERIES: QUERIES, DIMS: DIMS, WEIGHT: WEIGHT,
+    QUERIES: QUERIES, DIMS: DIMS, WEIGHT: WEIGHT, RADIUS_TXT: RADIUS_TXT,
     evaluate: evaluate, fmtDist: fmtDist, haversine: haversine,
     routeTxt: routeTxt, distTxt: distTxt, resolveHeight: resolveHeight,
+    MED_NOISE: MED_NOISE, pickMed: pickMed, medChain: medChain,
     scoreColor: scoreColor, clamp: clamp
   };
 })();
