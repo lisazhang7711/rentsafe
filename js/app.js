@@ -13,7 +13,9 @@
   // 「评分取的点」和「算路径的点」不是同一家机构
   var MED_NOISE = RS.model.MED_NOISE;
 
-  // 需要算真实路径的关键点位：消防与警务算「车程」，其余算「步行」
+  // 需要算真实路径的关键点位：消防算「车程」（消防车开过来），其余一律按「步行」——
+  // 警务原来也算车程（意图是警力到场），但用户反馈（2026-10-10）：派出所 240 m
+  // 却标注「驾车」很奇怪，住户视角就是走过去报警，改回步行。
   var ROUTE_PLAN = [
     { id: 'med',         bag: 'medical',     mode: 'walk',  label: '到医院' },
     { id: 'pharmacy',    bag: 'pharmacy',    mode: 'walk',  label: '到药店' },
@@ -23,7 +25,7 @@
     { id: 'shelter',     bag: 'shelter',     mode: 'walk',  label: '到避难开阔地' },
     { id: 'metro',       bag: 'metro',       mode: 'walk',  label: '到地铁站' },
     { id: 'fire',        bag: 'fire',        mode: 'drive', label: '消防车到场' },
-    { id: 'police',      bag: 'police',      mode: 'drive', label: '警力到场' }
+    { id: 'police',      bag: 'police',      mode: 'walk',  label: '到警务点' }
   ];
 
   /* ---------------- toast ---------------- */
