@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>安居安全评估 · 租房买房前，先做一次安全体检</title>
-<meta name="description" content="输入小区名，3 秒生成应急医疗、消防安全、断电韧性、治安门禁、生活保障、环境风险六维安全评估报告，附断电 72 小时清单与看房确认清单。">
+<meta name="description" content="输入小区名，约 20 秒生成应急医疗、消防安全、断电韧性、治安门禁、生活保障、环境风险六维安全评估报告，附断电 72 小时清单与看房确认清单。">
 <link rel="stylesheet" href="css/style.css?v=3">
 </head>
 <body>
@@ -18,7 +18,7 @@
     <nav class="nav">
       <a href="index.html" class="on">首页</a>
       <a href="assess.html">开始评估</a>
-      <a href="#price">定价</a>
+      <a href="index.html#price">价格</a>
     </nav>
   </div>
 </header>
@@ -30,7 +30,8 @@
     <h1>看房之前，先把这套房子的<br>安全账算清楚。</h1>
     <p class="lead">
       中介会告诉你地铁多近、学区多好，但没人会说：最近的消防站离这儿 4 公里，停电三天你能不能买到水。
-      输入小区名，系统检索周边 3 公里的应急与生活资源，给出一份能直接带去看房的体检报告。
+      输入小区名，系统按分级半径检索周边应急与生活资源（公交 1 km、便利店 1.5 km、超市菜场 2 km、
+      公园地铁 3 km、医院 5 km、消防 6 km），给出一份能直接带去看房的体检报告。单次评估约需 15–30 秒。
     </p>
 
     <div class="hero-search">
@@ -58,7 +59,7 @@
       </div>
       <div class="card pad feat">
         <h4>消防安全</h4>
-        <p>消防救援站可达性 + 可疏散开阔地 + 你的楼层。18 层以上且消防站超过 2.5 km，会直接判定为高风险。</p>
+        <p>消防救援站可达性 + 可疏散开阔地 + 你的楼层。19 层以上（含超高层）且最近消防站超过 2.5 km，会列为高风险项。</p>
       </div>
       <div class="card pad feat">
         <h4>断电韧性</h4>
@@ -110,7 +111,7 @@
       <div class="card pad">
         <h4 style="margin-bottom:8px">④ 候选横向对比</h4>
         <ul class="bullets">
-          <li>最多保存 8 套候选</li>
+          <li>最多保存 8 套候选，可同时对比</li>
           <li>六维分数并排对比</li>
           <li>适合在两三套之间犹豫时使用</li>
         </ul>
@@ -120,8 +121,8 @@
 
   <!-- ============ 定价 ============ -->
   <section class="section" id="price">
-    <h2>定价</h2>
-    <p class="sub">在线评分永久免费，付费的是「能带走的那份」。</p>
+    <h2>价格</h2>
+    <p class="sub">在线评估与报告永久免费；需要人工介入的服务在正式开通前不收任何费用。</p>
     <div class="grid3">
       <div class="card pad">
         <h4>在线评估 · 免费</h4>
@@ -133,24 +134,24 @@
         <a class="btn ghost sm" style="margin-top:12px" href="assess.html">立即使用</a>
       </div>
       <div class="card pad" style="border-color:#0f6b5c">
-        <h4>完整报告 · ¥19.9</h4>
-        <p class="muted small">可打印 PDF / 图片版，含全部清单。</p>
+        <h4>离线版报告 · 免费</h4>
+        <p class="muted small">浏览器直接打印 / 另存 PDF，或复制纯文字版带走。</p>
         <ul class="bullets">
           <li>断电 72 小时清单</li>
           <li>看房与签约确认清单</li>
           <li>关键点位明细表</li>
         </ul>
-        <a class="btn sm" style="margin-top:12px" href="assess.html">生成报告</a>
+        <a class="btn sm" style="margin-top:12px" href="assess.html">去生成</a>
       </div>
       <div class="card pad">
-        <h4>深度定制 · ¥49.9</h4>
-        <p class="muted small">楼栋级 + 人工复核 + 通勤实测。</p>
+        <h4>人工定制 · 尚未开通</h4>
+        <p class="muted small">楼栋级复核、通勤实测这类需要人工介入的服务还没上线，开通前不会产生任何费用。</p>
         <ul class="bullets">
           <li>精确到楼栋与朝向</li>
-          <li>叠加本地内涝、规划与噪音核查</li>
-          <li>附一份决策建议</li>
+          <li>叠加内涝、规划与噪音核查</li>
+          <li>附一份决策建议（筹备中）</li>
         </ul>
-        <a class="btn gray sm" style="margin-top:12px" href="assess.html">先做免费版</a>
+        <button class="btn gray sm" style="margin-top:12px" disabled>筹备中</button>
       </div>
     </div>
   </section>
@@ -161,7 +162,7 @@
     <div class="grid2">
       <div class="card pad">
         <h4 style="margin-bottom:6px">数据来源是什么？</h4>
-        <p class="small muted">基于高德开放平台 POI 检索（半径 3 公里）与路径规划。报告里「直线」是两点间空中距离，只用于筛选；「实际路径」是高德算出的真实步行 / 驾车路网距离与耗时。消防站与警务点按车程算，其余按步行算。所有点位名称与距离都列在报告里，你可以自己复核。</p>
+        <p class="small muted">基于高德开放平台 POI 检索与路径规划，检索半径按品类分级：公交 1 km、便利店与加油站 1.5 km、超市与菜场 2 km、公园与地铁 3 km、医院 5 km、消防救援站 6 km。报告里「直线」是两点间空中距离，只用于筛选；「实际路径」是高德算出的真实步行 / 驾车路网距离与耗时。消防站与警务点按车程算，其余按步行算。所有点位名称与距离都列在报告里，你可以自己复核。</p>
       </div>
       <div class="card pad">
         <h4 style="margin-bottom:6px">分数低就一定不能住吗？</h4>
@@ -173,7 +174,7 @@
       </div>
       <div class="card pad">
         <h4 style="margin-bottom:6px">会保存我的搜索记录吗？</h4>
-        <p class="small muted">不会上传服务器。候选对比数据只存在你自己浏览器本地，清除浏览器数据即删除。</p>
+        <p class="small muted">我们没有自己的服务器，输入的小区名与候选清单只存在你自己的浏览器里，清除浏览器数据即删除。但要生成报告，地址必然会发送给高德开放平台用于检索（这是数据来源），请以高德的隐私政策为准。另外评估完成后地址会写进浏览器地址栏（便于分享），分享链接里会带上这个地址。</p>
       </div>
     </div>
   </section>
