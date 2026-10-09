@@ -108,10 +108,20 @@ input:focus,select:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0
 
 /* ---------- 工作台 ---------- */
 .work{display:grid;grid-template-columns:390px 1fr;gap:20px;align-items:start;padding:20px 0 60px}
-.side{position:sticky;top:80px;display:flex;flex-direction:column;gap:14px}
+/* 左栏做成独立滚动容器（2026-10-10 用户反馈：原来只是 sticky 跟着整页滚，
+ * 光标放在左栏上滚动的还是右侧内容，必须把右边滚到底左栏才能继续动）。
+ * max-height + overflow-y 让左栏拥有自己的滚动条；overscroll-behavior:contain
+ * 阻止滚到顶/底后把滚动「链」给页面——这一条就是「在左边滚动右边却在动」的根因。 */
+.side{
+  position:sticky;top:80px;display:flex;flex-direction:column;gap:14px;
+  max-height:calc(100vh - 96px);overflow-y:auto;overscroll-behavior:contain;
+  padding-right:4px;scrollbar-width:thin;
+}
+.side::-webkit-scrollbar{width:6px}
+.side::-webkit-scrollbar-thumb{background:#d3d9e0;border-radius:99px}
 @media(max-width:1020px){
   .work{grid-template-columns:1fr}
-  .side{position:static}
+  .side{position:static;max-height:none;overflow:visible;overscroll-behavior:auto;padding-right:0}
   .grid3,.grid2,.radar-row{grid-template-columns:1fr}
   .hero h1{font-size:30px}
 }
