@@ -190,7 +190,6 @@
       flood: $('optFlood').checked,
       elderly: $('optElderly').checked,
       toddler: $('optToddler').checked,
-      child: $('optChild').checked,
       disabled: $('optDisabled').checked,
       device: $('optDevice').checked,
       pet: $('optPet').checked,
@@ -199,8 +198,7 @@
       pay: $('optPay') ? $('optPay').value : 'unk',
       title: $('optTitle') ? $('optTitle').value : 'unk',
       tenure: $('optTenure') ? $('optTenure').value : 'unk',
-      plan: $('optPlan') ? $('optPlan').value : 'unk',
-      schoolDep: $('optSchoolDep') ? $('optSchoolDep').checked : false
+      plan: $('optPlan') ? $('optPlan').value : 'unk'
     };
 
     // 地址去重拼接，避免出现「北京市朝阳区北京市朝阳区…」
