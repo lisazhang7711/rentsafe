@@ -229,11 +229,7 @@
         Object.keys(bag).forEach(function (k) {
           bag[k].forEach(function (p) { if (p.distance == null) p.distance = M.haversine(place, p); });
           bag[k].sort(function (a, b) { return a.distance - b.distance; });
-          var seen = {};
-          bag[k] = bag[k].filter(function (p) {
-            var key = p.name + '@' + Math.round(p.distance / 30);
-            if (seen[key]) return false; seen[key] = 1; return true;
-          });
+          bag[k] = dedupePois(bag[k]);
         });
         // 真实路径规划：步行 / 驾车，串行节流，失败即跳过（报告会明确标注未取到）
         var targets = [];
@@ -282,6 +278,24 @@
       $('result').innerHTML = '<div class="card pad"><h3>评估失败</h3><p class="muted" style="margin-top:8px">' +
         esc(err && err.message ? err.message : String(err)) + '</p></div>';
     });
+  }
+
+  /**
+   * 同一类别里，一个 POI 可能被多个近义词同时命中（例如便利蜂既是「便利店」也是「便民商店」）。
+   * 优先按高德返回的 POI id 去重；id 缺失时退回「店名 + 粗距离」的近似去重，
+   * 否则数量会被重复计数，密度加分和「N 家」都会虚高。
+   */
+  function dedupePois(list) {
+    var byId = {}, seen = {}, out = [];
+    list.forEach(function (p) {
+      if (p.id && byId[p.id]) return;
+      var rough = p.name + '@' + Math.round(p.distance / 50);
+      if (seen[rough]) return;
+      if (p.id) byId[p.id] = 1;
+      seen[rough] = 1;
+      out.push(p);
+    });
+    return out;
   }
 
   /* ---------------- 结果区按钮 ---------------- */

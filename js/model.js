@@ -15,25 +15,34 @@
   /* ---------------- 检索清单 ---------------- */
   // 说明：高德周边搜索对 "A|B" 多关键词支持不稳定，改为「一关键词一次请求」，
   // 同语义的多个近义词用多条查询并存到同一 id 下，由代码合并去重。
+  /* 每类资源用「多个近义词 + | 」合成一次请求：实测高德 PlaceSearch 支持 | 分隔的多关键字，
+   * OR 召回且结果仍按距离排序，这样既省请求（避免触发 QPS 限流）又显著补回漏掉的点位。
+   *
+   * 为什么必须多词：高德是「关键词 + 分类」联合召回，单一词汇会系统性漏数据。
+   * 实测（忠实里西区）：
+   *   只查「便利店」 → 最近一家 537 m；改成「便利店|便民商店|小卖部|食杂店」后，
+   *                    门口 16 m 的惠佳美食品店才出现——名字里没"便利店"三个字的
+   *                    个体小店靠前者根本查不出来。
+   *   只查「小学」   → 查不到 70 m 外的北京市文汇中学；改成「小学|中学|九年一贯制」后，
+   *                    文汇中学排第 1、文汇小学排第 3，两所都在。
+   * pages:2 用于总数超过单页上限的类别（便利店 1.5 km 内实测 78 家，单页只装得下 50 家）。 */
   var QUERIES = [
-    { id: 'medical',      label: '综合医院',        kw: '综合医院',           radius: 5000 },
-    { id: 'medical',      label: '医院',            kw: '医院',               radius: 5000 },
-    { id: 'clinic',       label: '社区卫生服务中心', kw: '社区卫生服务中心',   radius: 3000 },
-    { id: 'pharmacy',     label: '药店',            kw: '药店',               radius: 1500 },
-    { id: 'fire',         label: '消防救援站',      kw: '消防救援站',         radius: 6000 },
-    { id: 'fire',         label: '消防队',          kw: '消防队',             radius: 6000 },
-    { id: 'police',       label: '派出所',          kw: '派出所',             radius: 3000 },
-    { id: 'shelter',      label: '公园',            kw: '公园',               radius: 3000 },
-    { id: 'supermarket',  label: '超市',            kw: '超市',               radius: 2000 },
-    { id: 'convenience',  label: '便利店',          kw: '便利店',             radius: 1500 },
-    { id: 'market',       label: '菜市场',          kw: '菜市场',             radius: 2000 },
-    { id: 'metro',        label: '地铁站',          kw: '地铁站',             radius: 3000 },
-    { id: 'bus',          label: '公交站',          kw: '公交站',             radius: 1000 },
-    { id: 'school',       label: '小学',            kw: '小学',               radius: 2000 },
-    { id: 'gas',          label: '加油站',          kw: '加油站',             radius: 1500 },
-    { id: 'substation',   label: '变电站',          kw: '变电站',             radius: 1500 },
-    { id: 'refuse',       label: '垃圾站',          kw: '垃圾站',             radius: 1500 },
-    { id: 'funeral',      label: '殡仪馆',          kw: '殡仪馆',             radius: 3000 }
+    { id: 'medical',      label: '医院',         kw: '综合医院|医院',                       radius: 5000 },
+    { id: 'clinic',       label: '社区卫生服务', kw: '社区卫生服务中心|社区卫生服务站|社区医院', radius: 3000 },
+    { id: 'pharmacy',     label: '药店',         kw: '药店|药房',                           radius: 1500 },
+    { id: 'fire',         label: '消防救援',     kw: '消防救援站|消防队|消防站',            radius: 6000 },
+    { id: 'police',       label: '警务资源',     kw: '派出所|警务站|警务工作室',            radius: 3000 },
+    { id: 'shelter',      label: '开阔地',       kw: '公园|广场|体育场',                    radius: 3000 },
+    { id: 'supermarket',  label: '超市',         kw: '超市|生鲜超市|生活超市',              radius: 2000 },
+    { id: 'convenience',  label: '便利店',       kw: '便利店|便民商店|小卖部|食杂店',       radius: 1500, pages: 2 },
+    { id: 'market',       label: '菜市场',       kw: '菜市场|农贸市场|生鲜市场',            radius: 2000 },
+    { id: 'metro',        label: '地铁站',       kw: '地铁站',                              radius: 3000 },
+    { id: 'bus',          label: '公交站',       kw: '公交站',                              radius: 1000 },
+    { id: 'school',       label: '中小学',       kw: '小学|中学|九年一贯制',                radius: 2000 },
+    { id: 'gas',          label: '加油站',       kw: '加油站|加气站',                       radius: 1500 },
+    { id: 'substation',   label: '变电站',       kw: '变电站|变电所',                       radius: 1500 },
+    { id: 'refuse',       label: '垃圾站',       kw: '垃圾站|垃圾中转站|垃圾楼|环卫站',     radius: 1500 },
+    { id: 'funeral',      label: '殡葬设施',     kw: '殡仪馆|殡葬|陵园|公墓|骨灰堂',        radius: 3000 }
   ];
 
   /* 检索半径是分级配置的（消防 6 km、医院 5 km、地铁/公园 3 km、便利店 1.5 km、公交 1 km），
@@ -169,8 +178,22 @@
   }
 
   /* ---------------- 主评估 ---------------- */
-  function evaluate(poiBag, opt) {
+  function evaluate(bagRaw, opt) {
     opt = opt || {};
+    /* 关键词放宽是为了把漏掉的小店补回来，代价是会串进来同名不同类的点
+     * （实测查「广场」会命中「崇文门出口(东二环西向)」这种立交桥出口）。
+     * 这里按高德返回的 POI 类型收一次口，只对容易串味的类别生效。 */
+    var TYPE_KEEP = {
+      shelter: /公园|广场|体育场|绿地/,
+      school: /小学|中学|学校|九年一贯/
+    };
+    var poiBag = {};
+    Object.keys(bagRaw).forEach(function (k) {
+      var re = TYPE_KEEP[k];
+      poiBag[k] = re
+        ? (bagRaw[k] || []).filter(function (p) { return re.test(p.type || ''); })
+        : (bagRaw[k] || []);
+    });
     // mode 只认两种口径，非法值（?mode=xxx）会让权重表变成 undefined，
     // 总分恒为 0、等级 D、权重列显示 NaN —— 这里直接兜住
     var mode = (opt.mode === 'buy') ? 'buy' : 'rent';
@@ -255,8 +278,12 @@
     ev.power = [
       '最近采买点：' + (nearest(poiBag.supermarket) ? nearest(poiBag.supermarket).name + '（' + distTxt(nearest(poiBag.supermarket), R.supermarket) + '）' : '未检索到'),
       '生鲜/菜市场：' + (nearest(poiBag.market) ? distTxt(nearest(poiBag.market), R.market) : '未检索到'),
+      // 列出最近 3 家，方便拿去看房时实地核对（小店往往门脸不起眼，只有名字不好找）
       '便利店：' + (poiBag.convenience && poiBag.convenience.length
-        ? poiBag.convenience.length + ' 家，最近 ' + distTxt(nearest(poiBag.convenience), R.convenience)
+        ? '共 ' + poiBag.convenience.length + ' 家，最近 ' +
+          poiBag.convenience.slice(0, 3).map(function (p) {
+            return p.name + '（' + fmtDist(p.distance) + '）';
+          }).join(' · ')
         : '未检索到'),
       '断电容忍：' + (opt.device ? '有需电医疗设备（制氧机/呼吸机/冷藏药品），停电风险被放大' :
                      opt.elderly || opt.toddler ? '有老人或幼儿，对停水停电耐受更差' :
@@ -294,7 +321,12 @@
     ev.life = [
       '地铁：' + (nearest(poiBag.metro) ? nearest(poiBag.metro).name + '（' + distTxt(nearest(poiBag.metro), R.metro) + '）' : '3 km 内未检索到'),
       '公交：' + (nearest(poiBag.bus) ? fmtDist(nearest(poiBag.bus).distance) : '未检索到'),
-      '中小学：' + (nearest(poiBag.school) ? nearest(poiBag.school).name + '（' + fmtDist(nearest(poiBag.school).distance) + '）' : '未检索到') +
+      // 原来只列最近的一所，小学和中学合并检索后会被挤掉看不见；改成列最近 3 所
+      '中小学：' + (poiBag.school && poiBag.school.length
+        ? poiBag.school.slice(0, 3).map(function (p) {
+            return p.name + '（' + fmtDist(p.distance) + '）';
+          }).join(' · ')
+        : '未检索到') +
         (hasKid ? '（家中有幼儿，此项权重已上调）' : '')
     ];
 

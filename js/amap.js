@@ -110,67 +110,111 @@
     });
   }
 
-  /** 单次周边搜索（失败自动重试 1 次） */
-  function nearOnce(AMap, keyword, lng, lat, radius, retry) {
+  /* 高德 PlaceSearch 单页上限是 50 条；城区里便利店/超市一公里内能上百家，
+   * 旧的 pageSize:30 只读第一页 = 系统性丢数据（实测忠实里西区便利店共 64 家，只读回 30 家）。 */
+  var MAX_PAGE_SIZE = 50;
+
+  function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  /** 拉取某一页周边搜索结果 */
+  function searchPage(AMap, keyword, lng, lat, radius, pageIndex, pageSize) {
     return new Promise(function (resolve) {
-      var ps = new AMap.PlaceSearch({
-        pageSize: 30, pageIndex: 1, extensions: 'base',
-        citylimit: false, autoFitView: false
-      });
       var finished = false;
       var timer = setTimeout(function () {
         if (finished) return; finished = true;
-        if (retry) { nearOnce(AMap, keyword, lng, lat, radius, false).then(resolve); }
-        else resolve([]);
-      }, 9000);
+        resolve({ err: 'timeout', pois: [] });
+      }, 10000);
       try {
+        var ps = new AMap.PlaceSearch({
+          pageSize: pageSize, pageIndex: pageIndex, extensions: 'base',
+          citylimit: false, autoFitView: false
+        });
         ps.searchNearBy(keyword, [lng, lat], radius, function (status, result) {
           if (finished) return; finished = true; clearTimeout(timer);
-          var out = [];
           if (status === 'complete' && result && result.poiList && result.poiList.pois) {
-            result.poiList.pois.forEach(function (p) {
-              if (!p.location) return;
-              out.push({
-                name: p.name, address: p.address || '', type: p.type || '',
-                lng: p.location.lng, lat: p.location.lat,
-                distance: typeof p.distance === 'number' ? p.distance : null,
-                tel: p.tel || ''
-              });
-            });
-          }
-          // 只在超时/异常时重试；空结果不重试，避免放大请求量触发限流
-          resolve(out);
+            resolve({ total: Number(result.poiList.count) || 0, pois: result.poiList.pois });
+          } else resolve({ err: status, pois: [] });
         });
-      } catch (e) { if (!finished) { finished = true; clearTimeout(timer); resolve([]); } }
+      } catch (e) {
+        if (!finished) { finished = true; clearTimeout(timer); resolve({ err: String(e), pois: [] }); }
+      }
+    });
+  }
+
+  function toOut(pois) {
+    var out = [];
+    pois.forEach(function (p) {
+      if (!p.location) return;
+      out.push({
+        id: p.id || '',                 // 供跨关键词去重：同一家店被几个词同时命中时只算一次
+        name: p.name, address: p.address || '', type: p.type || '',
+        lng: p.location.lng, lat: p.location.lat,
+        distance: typeof p.distance === 'number' ? p.distance : null,
+        tel: p.tel || ''
+      });
+    });
+    return out;
+  }
+
+  /** 串行翻页，直到拿满 maxPage 页或该页为空 */
+  function restPages(AMap, keyword, lng, lat, radius, size, maxPage, idx, acc, total) {
+    if (idx > maxPage || acc.length >= total) return Promise.resolve(acc);
+    return searchPage(AMap, keyword, lng, lat, radius, idx, size).then(function (r) {
+      if (r.err || !r.pois.length) return acc;
+      return restPages(AMap, keyword, lng, lat, radius, size, maxPage, idx + 1,
+        acc.concat(r.pois), total);
+    });
+  }
+
+  /**
+   * 单次周边搜索（失败自动重试 1 次）。
+   * pages: 最多翻到第几页，默认 1。设为 2~3 可把高密度类别（便利店、超市）取全。
+   */
+  function nearOnce(AMap, keyword, lng, lat, radius, pages, tryIdx) {
+    pages = Math.max(1, Math.min(3, pages || 1));
+    tryIdx = tryIdx || 0;
+    return searchPage(AMap, keyword, lng, lat, radius, 1, MAX_PAGE_SIZE).then(function (r) {
+      if (r.err) {
+        // 只在超时 / error（多为高德 QPS 限流）时补一次，且先退避；正常空结果不重试
+        return tryIdx === 0
+          ? delay(900).then(function () {
+              return nearOnce(AMap, keyword, lng, lat, radius, pages, 1);
+            })
+          : [];
+      }
+      var total = r.total || r.pois.length;
+      if (pages === 1) return toOut(r.pois);
+      return restPages(AMap, keyword, lng, lat, radius, MAX_PAGE_SIZE, pages, 2, r.pois, total)
+        .then(function (all) { return toOut(all); });
     });
   }
 
   /** 单次关键词搜索（供外部调用，如小区名精确定位） */
   function search(kw, lng, lat, radius) {
-    return load().then(function (AMap) { return nearOnce(AMap, kw, lng, lat, radius || 3000, true); });
+    return load().then(function (AMap) { return nearOnce(AMap, kw, lng, lat, radius || 3000, 1, 0); });
   }
 
   /**
-   * 串行节流批量周边搜索。
-   * 高德对单 Key 有 QPS 限制，并发放太猛会大面积返回空/错误，
-   * 因此改为「一条接一条 + 固定间隔」的流水线，并配进度回调。
+   * 周边搜索批处理。
+   *
+   * 【为什么必须串行】实测同一批 15 个关键词：三路并发时 6 个被高德限流返回 error
+   * （这些错误如果不重试就会被静默丢弃，直接表现为报告里整类资源缺失）；
+   * 改成单路串行 + 间隔 350 ms 后 15/15 全部成功。所以这里刻意不用并发。
+   * 单请求约 0.5 s，一轮 16 类资源约 12-16 秒。
    */
   function nearBatch(queries, lng, lat, onStep) {
     return load().then(function (AMap) {
       var i = 0, done = 0, out = {};
-      var gap = cfg.gap || 260;
-      /* 两路并发：18 类资源串行约 20 秒，两路约 10 秒。
-         仍保留单路节流间隔，不会明显增加对高德的瞬时压力。 */
-      var CONC = 2;
+      var gap = cfg.gap || 350;
       return new Promise(function (resolve) {
         function step() {
           if (i >= queries.length) return;
           var q = queries[i++];
           var r = q.radius || cfg.radius;
-          nearOnce(AMap, q.kw, lng, lat, r, true)
+          nearOnce(AMap, q.kw, lng, lat, r, q.pages || 1, 0)
             .catch(function () { return []; })
             .then(function (list) {
-              // 同一 id 的多个近义词合并
+              // 同一 id 的多个结果合并
               out[q.id] = (out[q.id] || []).concat(list.map(function (p) { p.qid = q.id; return p; }));
               done++;
               if (onStep) onStep(done, queries.length, q.label || q.kw);
@@ -178,7 +222,7 @@
               else setTimeout(step, gap);
             });
         }
-        for (var w = 0; w < CONC; w++) step();
+        step();
       });
     });
   }
