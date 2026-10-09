@@ -333,17 +333,39 @@
     opt = opt || {};
     /* 关键词放宽是为了把漏掉的小店补回来，代价是会串进来同名不同类的点
      * （实测查「广场」会命中「崇文门出口(东二环西向)」这种立交桥出口）。
-     * 这里按高德返回的 POI 类型收一次口，只对容易串味的类别生效。 */
+     * 这里按高德返回的 POI 类型收一次口，只对容易串味的类别生效。
+     *
+     * 【超市 ≠ 便利店】实测高德的「便利店」类型召回里混着大量名为「XX超市」
+     * 「XX烟酒副食超市」的小型超市——高德把这类小超市也归入便利店类目。
+     * 用户反馈（2026-10-10）指出报告的「便利店」一行列出来的全是超市，
+     * 两者规模与备货逻辑完全不同，必须拆开：便利店只留真正的便利店/便民店，
+     * 超市类只留类型串里带「超市」的。注意用过滤后的列表非空才生效，
+     * 防止某些城市类型串写法不同导致整类资源被误删归零。 */
     var TYPE_KEEP = {
       shelter: /公园|广场|体育场|绿地/,
-      school: /小学|中学|学校|九年一贯/
+      school: /小学|中学|学校|九年一贯/,
+      supermarket: /超级市场|超市/,
+      convenience: /便利店|便民商店|小卖部|食杂店|烟酒|副食|杂货/
     };
+    /* 便利店类里必须剔除的「伪便利店」：名为/类型为超市、商场的点位。
+     * 高德把小型超市也归入「便利店」类目，不剔的话报告的便利店一栏全是超市。 */
+    var CONV_DROP = /超市|超级市场|商场|购物中心|量贩/;
     var poiBag = {};
     Object.keys(bagRaw).forEach(function (k) {
+      var list = bagRaw[k] || [];
       var re = TYPE_KEEP[k];
-      poiBag[k] = re
-        ? (bagRaw[k] || []).filter(function (p) { return re.test(p.type || ''); })
-        : (bagRaw[k] || []);
+      if (re) {
+        var kept = list.filter(function (p) {
+          return re.test(p.type || '') || re.test(p.name || '');
+        });
+        if (k === 'convenience') {
+          var noBig = kept.filter(function (p) { return !CONV_DROP.test(p.type || '') && !CONV_DROP.test(p.name || ''); });
+          if (noBig.length) kept = noBig;
+        }
+        // 过滤后为空说明该地类型串写法不同，退回原列表，避免整类资源被误删归零
+        list = kept.length ? kept : list;
+      }
+      poiBag[k] = list;
     });
     /* 按名字再收一次口。检索放宽后，消防这一类会混进「忠实里社区义务消防队办公室」
      * （居委会的一间办公室，20 m）和「东花市派出所消防监督」（一个岗位，不是站点），
