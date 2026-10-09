@@ -220,12 +220,20 @@
 
       /* 断电清单 */
       '<section class="card pad" style="margin-bottom:16px">' +
-        '<div class="sec-t">断电 72 小时可用性清单</div>' + checklist(res.power72, 'p72-') +
+        '<div class="sec-t">断电 72 小时可用性清单</div>' +
+        '<p class="hint small muted" style="margin:-4px 0 10px">' +
+          '这一份是<b>家庭应急储备清单</b>，和下面的签约清单用途不同：它不需要问任何人，' +
+          '是给自己家里备的——把对应物资备在住所内，备好一项就勾一项，勾选只是自己记账。' +
+          '其中「补给点」「药品」两行是按本次评估地址自动检索的就近位置，供断电时参考。' +
+        '</p>' + checklist(res.power72, 'p72-') +
       '</section>' +
 
       /* 看房清单 */
       '<section class="card pad" style="margin-bottom:16px">' +
-        '<div class="sec-t">' + modeTxt + ' · 看房与签约确认清单</div>' + checklist(res.visit, 'vs-') +
+        '<div class="sec-t">' + modeTxt + ' · 看房与签约确认清单</div>' +
+        '<p class="hint small muted" style="margin:-4px 0 10px">' +
+          '这一份才是<b>问别人核实</b>用的：看房、问物业或房东，逐条确认属实后再勾。' +
+        '</p>' + checklist(res.visit, 'vs-') +
       '</section>' +
 
       /* 页脚 */
