@@ -23,14 +23,12 @@
    *   只查「便利店」 → 最近一家 537 m；改成「便利店|便民商店|小卖部|食杂店」后，
    *                    门口 16 m 的惠佳美食品店才出现——名字里没"便利店"三个字的
    *                    个体小店靠前者根本查不出来。
-   *   只查「小学」   → 查不到 70 m 外的北京市文汇中学；改成「小学|中学|九年一贯制」后，
-   *                    文汇中学排第 1、文汇小学排第 3，两所都在。
    * pages:2 用于总数超过单页上限的类别（便利店 1.5 km 内实测 78 家，单页只装得下 50 家）。 */
   /* 每个类别优先按「高德 POI 类型」检索，关键词只作兜底（见 amap.js nearQuery）。
    *
    * 【为什么要按类型检索】高德的关键词召回要求 POI 名字里含有该词，但大量门店
    * 名字里根本没有类型名——便利蜂、京客隆便利店、惠佳美食品店都不含「便利店」，
-   * 叮当快药不含「药店」，北京市文汇中学不含「小学」。靠堆品牌词补是补不完的，
+   * 叮当快药不含「药店」，京客隆便利店不含「便利店」。靠堆品牌词补是补不完的，
    * 而按类型检索能一次性把「名不副实」的门店全部召回。
    *
    * 【关键词串不宜太长】高德对 `A|B|C` 的处理不稳定：实测「物美|便利蜂」两个词
@@ -38,10 +36,9 @@
    * 控制在 3 个近义词以内，覆盖面主要靠 type 而不是靠长串。
    *
    * 【哪些类有 type】实测可用的类型名：医院 / 卫生院 / 药房 / 公园 / 超级市场 /
-   * 便利店 / 地铁站 / 小学 / 中学 / 加油站 / 陵园。
+   * 便利店 / 地铁站 / 加油站 / 陵园。
    * 实测 no_data、只能靠关键词的：消防队、消防站、派出所、警务站、体育场、
-   * 菜市场、农贸市场、公交站、变电站、垃圾站、环卫设施、殡仪馆。
-   * 中小学必须拆两条：高德的「小学」和「中学」是两个独立类型，合不进一次请求。 */
+   * 菜市场、农贸市场、公交站、变电站、垃圾站、环卫设施、殡仪馆。 */
   var QUERIES = [
     /* 医院是唯一不能用 type 检索的类别：高德的「医院」类型把医美、口腔、诊所、
      * 社区卫生服务中心全算进去，5 km 内 600 条，而类型检索是按距离排序的，
@@ -59,8 +56,7 @@
     { id: 'market',       label: '菜市场',                         kw: '菜市场|农贸市场',            radius: 2000 },
     { id: 'metro',        label: '地铁站',       type: '地铁站',   kw: '地铁站',                    radius: 3000 },
     { id: 'bus',          label: '公交站',                         kw: '公交站',                    radius: 1000 },
-    { id: 'school',       label: '小学',         type: '小学',     kw: '小学',                      radius: 2000 },
-    { id: 'school',       label: '中学',         type: '中学',     kw: '中学',                      radius: 2000 },
+    // 学校（小学/中学）不检索：本工具只做安全与应急口径，学区与就学不属于评估范围
     { id: 'gas',          label: '加油站',       type: '加油站',   kw: '加油站',                    radius: 1500 },
     { id: 'substation',   label: '变电站',                         kw: '变电站|变电所',              radius: 1500 },
     { id: 'refuse',       label: '垃圾站',                         kw: '垃圾站|垃圾中转站',          radius: 1500 },
@@ -80,7 +76,7 @@
     { id: 'fire',  name: '消防安全', icon: '火', desc: '消防站车程、避难开阔地、楼层高度与疏散条件' },
     { id: 'power', name: '断电韧性', icon: '电', desc: '停电 72 小时内能否就近获得水、食物与药品' },
     { id: 'safe',  name: '治安门禁', icon: '安', desc: '警务资源距离与小区自身门禁、监控、居住形态' },
-    { id: 'life',  name: '生活保障', icon: '居', desc: '通勤、采买、子女就学等日常运转条件' },
+    { id: 'life',  name: '生活保障', icon: '居', desc: '通勤与采买等日常运转条件（不含学区与就学）' },
     { id: 'env',   name: '环境风险', icon: '环', desc: '加油站、变电站、垃圾站、殡葬、内涝等影响' }
   ];
 
@@ -179,13 +175,6 @@
         unk:   [-8, '周边规划未了解', '规划局官网可查控规，未查之前按存在未知计入。'],
         risk:  [-18, '已知有新建嫌恶 / 市政设施规划', '这类规划一旦落地，居住体验与估值同时受损，且业主几乎无法追回差额。']
       }[opt.plan]);
-      if (opt.schoolDep) {
-        var sc = nearest(poiBag.school);
-        if (sc && sc.distance <= 800) plus(2, '学区诉求：对口学校很近', '最近 ' + sc.name + '（' + fmtDist(sc.distance) + '），步行可达。');
-        else if (sc && sc.distance <= 1500) keep('学区诉求：学校 1.5 km 内', '最近 ' + sc.name + '（' + fmtDist(sc.distance) + '）。学区以当年教委划片为准，务必核实划片范围，不能只看距离。');
-        else if (sc && sc.distance <= 2500) cut(6, '学区诉求：最近学校超过 1.5 km', '最近 ' + sc.name + '（' + fmtDist(sc.distance) + '），通勤成本高，跨片入学通常不可行。');
-        else cut(14, '学区诉求：2.5 km 内未检索到中小学', '有学区诉求却检索不到对口资源，说明这个位置不符合需求，且学区随时可能重新划片。');
-      }
     }
     items = items.filter(function (x) { return x.t; });
     if (!items.length) keep(mode === 'rent' ? '租约按常规处理' : '购房信息待补充', '这一块没有填到异常项，若有特殊约定请在上方补充后重跑。');
@@ -224,7 +213,7 @@
    * 不要在 13 个 distScore 调用点分散改。
    *
    * MISS_SCALE：搜不到某类资源时的兜底分折算系数。原来各处直接给 40~55 分，
-   *   意味着「医院、消防、学校一个都搜不到」仍能拿到接近及格的分，
+   *   意味着「医院、消防、便利店一个都搜不到」仍能拿到接近及格的分，
    *   不同地址的分数被压在 90 分一条线上挤成一团。折算后落到 22~30 分区间。
    * EXCEED_CUT：超出最远阈值后的掉档幅度。原来只扣 8 分，
    *   5 km 的医院和 40 km 的医院几乎同分，地址信息全在这一步被抹平。
@@ -320,8 +309,6 @@
     if ((o.elderly || o.disabled) && h.H >= 7) w.fire += .03;
     // 内涝史 / 地下空间 —— 环境风险权重上调
     if (o.basement || o.flood) w.env += .04;
-    // 无幼儿时，就学便利的重要性下降
-    if (!o.toddler && !o.child) w.life -= .02;
     var sum = 0;
     for (k in w) { w[k] = Math.max(.03, w[k]); sum += w[k]; }
     for (k in w) w[k] = w[k] / sum;
@@ -343,7 +330,6 @@
      * 防止某些城市类型串写法不同导致整类资源被误删归零。 */
     var TYPE_KEEP = {
       shelter: /公园|广场|体育场|绿地/,
-      school: /小学|中学|学校|九年一贯/,
       supermarket: /超级市场|超市/,
       convenience: /便利店|便民商店|小卖部|食杂店|烟酒|副食|杂货/
     };
@@ -502,26 +488,24 @@
       '居住形态：' + (opt.partition ? '隔断/群租（人员复杂、消防分隔差）' : opt.share ? '合租（人员流动大）' : '整租/自住')
     ];
 
-    /* —— 生活保障 —— */
-    var hasKid = opt.toddler || opt.child;
-    var wMetro = hasKid ? .30 : .34, wSchool = hasKid ? .28 : .18;
+    /* —— 生活保障 ——
+     * 只保留通勤与采买：学校（小学/中学）已整体下线，本工具不做学区与就学评估。
+     * 权重按原 metro .34 / bus .20 / 采买 .26 的比例归一化到 1（.42 / .24 / .34）。 */
     var sLife = clamp(
-      distScore(poiBag.metro, [[600, 100], [1200, 88], [2000, 74]], 45) * wMetro +
-      distScore(poiBag.bus, [[200, 100], [400, 88], [700, 76]], 52) * .20 +
-      distScore(poiBag.supermarket, [[400, 100], [800, 88], [1500, 76]], 48) * .26 +
-      distScore(poiBag.school, [[600, 100], [1200, 86], [2000, 74]], 52) * wSchool, 0, 100);
+      distScore(poiBag.metro, [[600, 100], [1200, 88], [2000, 74]], 45) * .42 +
+      distScore(poiBag.bus, [[200, 100], [400, 88], [700, 76]], 52) * .24 +
+      distScore(poiBag.supermarket, [[400, 100], [800, 88], [1500, 76]], 48) * .34, 0, 100);
     if (opt.elevator === 'none' && h.floor >= 4) sLife -= 6;           // 日常上下楼成本
     sLife = clamp(sLife, 0, 100);
     ev.life = [
       '地铁：' + (nearest(poiBag.metro) ? nearest(poiBag.metro).name + '（' + distTxt(nearest(poiBag.metro), R.metro) + '）' : '3 km 内未检索到'),
       '公交：' + (nearest(poiBag.bus) ? fmtDist(nearest(poiBag.bus).distance) : '未检索到'),
-      // 原来只列最近的一所，小学和中学合并检索后会被挤掉看不见；改成列最近 3 所
-      '中小学：' + (poiBag.school && poiBag.school.length
-        ? poiBag.school.slice(0, 3).map(function (p) {
-            return p.name + '（' + fmtDist(p.distance) + '）';
-          }).join(' · ')
-        : '未检索到') +
-        (hasKid ? '（家中有幼儿，此项权重已上调）' : '')
+      // 采买同时关系日常运转与断电补给，列最近 3 家方便拿去看房时实地核对
+      '超市/菜场：' + ((poiBag.supermarket || []).length || (poiBag.market || []).length
+        ? (poiBag.supermarket || []).concat(poiBag.market || [])
+            .sort(function (a, b) { return a.distance - b.distance; })
+            .slice(0, 3).map(function (p) { return p.name + '（' + fmtDist(p.distance) + '）'; }).join(' · ')
+        : '未检索到')
     ];
 
     /* —— 环境风险（扣分制）——
@@ -837,7 +821,7 @@
       L.push({ t: '拍照留存：入住前全屋视频 + 水电表底数', s: '退租押金争议的唯一凭据' });
     } else {
       L.push({ t: '查产权与抵押：不动产权证、抵押查封、土地年限', s: '必须去不动产登记中心核验，不能只听中介' });
-      L.push({ t: '查学区与规划：学区是否被划出、周边 3 km 有无新建嫌恶设施规划', s: '规划局官网可查控制性详细规划' });
+      L.push({ t: '查周边规划：周边 3 km 有无新建嫌恶 / 市政设施规划', s: '规划局官网可查控制性详细规划' });
       L.push({ t: '查楼栋与楼层：是否为设备层/腰线层/顶层，电梯品牌与检修记录', s: '设备层噪音、顶层漏水是高频投诉点' });
     }
     return L;
