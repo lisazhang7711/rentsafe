@@ -9,8 +9,9 @@
 
   var state = { mode: 'rent', place: null, result: null, map: null, markers: [] };
 
-  // 医疗类噪声（与 model 保持一致）：别把路径算到宠物医院头上
-  var MED_NOISE = /口腔|牙科|宠物|美容|整形|视力|眼镜|体检中心|中医馆|推拿|按摩/;
+  // 医疗类噪声：统一用 model 里的那份，避免两边正则不一致导致
+  // 「评分取的点」和「算路径的点」不是同一家机构
+  var MED_NOISE = RS.model.MED_NOISE;
 
   // 需要算真实路径的关键点位：消防与警务算「车程」，其余算「步行」
   var ROUTE_PLAN = [
@@ -206,11 +207,17 @@
       });
     }
 
-    var placeP = state.place && $('addrInput').value === state.place.title
+    // 只有「标题一致且确实有坐标」才复用上次的定位结果；
+    // 否则（比如从候选进入、标题改过、坐标为 null）重新走一次定位，避免后面 place.lng 为空炸掉
+    var placeP = (state.place && state.place.lng != null && state.place.lat != null &&
+                  $('addrInput').value === state.place.title)
       ? Promise.resolve(state.place)
       : resolvePlace(kw);
 
     placeP.then(function (place) {
+      if (!place || place.lng == null || place.lat == null) {
+        throw new Error('没能定位到这个地址，换一个更完整的写法试试（例如：北京市朝阳区北苑家园莲葩园）');
+      }
       state.place = place;
       afterLocate();
       $('progText').textContent = '正在检索周边资源 0/' + M.QUERIES.length;
@@ -233,10 +240,9 @@
         ROUTE_PLAN.forEach(function (t) {
           var list = bag[t.bag];
           if (!list || !list.length) return;
-          // 医院要跳过口腔/宠物/美容这类噪声点，否则会算到一家宠物医院头上
-          var p = t.bag === 'medical'
-            ? list.filter(function (x) { return !MED_NOISE.test(x.name); })[0]
-            : list[0];
+          // 医院必须和报告里展示的那家是同一家（否则会出现「直线 1.9km 却步行 1.0km」
+          // 这种物理上不可能的组合），其余类别取最近的即可
+          var p = t.bag === 'medical' ? M.pickMed(bag) : list[0];
           if (!p) return;
           targets.push({ id: t.id, lng: p.lng, lat: p.lat, mode: t.mode, label: t.label });
         });
@@ -307,6 +313,7 @@
     var arr = cands();
     arr.unshift({
       title: state.lastPlace.title, addr: state.lastPlace.addr,
+      lng: state.lastPlace.lng, lat: state.lastPlace.lat,
       score: state.result.score, grade: state.result.grade,
       mode: state.result.mode,
       dims: state.result.dims.map(function (d) { return { name: d.name, score: d.score }; }),
@@ -337,8 +344,8 @@
       b.onclick = function () {
         var c = cands()[+b.dataset.open];
         $('addrInput').value = c.title;
-        state.place = { title: c.title, addr: c.addr, lng: null, lat: null };
-        if (c.lng) state.place.lng = c.lng;
+        // 老候选可能没有存坐标（历史 bug），这里能做的最多是别把 null 当成「已定位」
+        state.place = { title: c.title, addr: c.addr, lng: c.lng || null, lat: c.lat || null };
         run();
       };
     });
@@ -347,7 +354,8 @@
   }
 
   function compare() {
-    var arr = cands().slice(0, 3);
+    // 与保存上限一致：最多同时对比 8 套（原来只取 3 套，与首页「最多保存 8 套」对不上）
+    var arr = cands().slice(0, 8);
     if (arr.length < 2) return toast('至少保存两个候选');
     var names = M.DIMS.map(function (d) { return d.name; });
     var head = '<tr><th>维度</th>' + arr.map(function (c) {
@@ -365,7 +373,7 @@
     var html = '<section class="card pad" style="margin-bottom:16px;border-color:#0f6b5c">' +
       '<div class="sec-t">候选横向对比 <span class="muted" style="text-transform:none;letter-spacing:0">（分数越高越安全）</span>' +
       '<button class="btn sm gray" id="cmpClose" style="float:right">关闭</button></div>' +
-      '<table class="cmp-tb"><thead>' + head + '</thead><tbody>' + body + total + '</tbody></table></section>';
+      '<div style="overflow-x:auto"><table class="cmp-tb"><thead>' + head + '</thead><tbody>' + body + total + '</tbody></table></div></section>';
     $('result').insertAdjacentHTML('afterbegin', html);
     $('cmpClose').onclick = function () { $('cmpClose').closest('section').remove(); };
   }
@@ -393,7 +401,8 @@
     // URL 直达
     var q = new URLSearchParams(location.search).get('addr');
     var m = new URLSearchParams(location.search).get('mode');
-    if (m) setMode(m);
+    // ?mode= 只认 buy / rent，其他值一律回落 rent（否则权重表为空、总分恒为 0）
+    if (m === 'buy' || m === 'rent') setMode(m);
     if (q) { $('addrInput').value = q; setTimeout(run, 300); }
   }
 
