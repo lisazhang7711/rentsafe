@@ -26,23 +26,45 @@
    *   只查「小学」   → 查不到 70 m 外的北京市文汇中学；改成「小学|中学|九年一贯制」后，
    *                    文汇中学排第 1、文汇小学排第 3，两所都在。
    * pages:2 用于总数超过单页上限的类别（便利店 1.5 km 内实测 78 家，单页只装得下 50 家）。 */
+  /* 每个类别优先按「高德 POI 类型」检索，关键词只作兜底（见 amap.js nearQuery）。
+   *
+   * 【为什么要按类型检索】高德的关键词召回要求 POI 名字里含有该词，但大量门店
+   * 名字里根本没有类型名——便利蜂、京客隆便利店、惠佳美食品店都不含「便利店」，
+   * 叮当快药不含「药店」，北京市文汇中学不含「小学」。靠堆品牌词补是补不完的，
+   * 而按类型检索能一次性把「名不副实」的门店全部召回。
+   *
+   * 【关键词串不宜太长】高德对 `A|B|C` 的处理不稳定：实测「物美|便利蜂」两个词
+   * 都生效，但「便利蜂|物美|罗森|全家|好邻居」只召回了第一个词。所以每个 kw
+   * 控制在 3 个近义词以内，覆盖面主要靠 type 而不是靠长串。
+   *
+   * 【哪些类有 type】实测可用的类型名：医院 / 卫生院 / 药房 / 公园 / 超级市场 /
+   * 便利店 / 地铁站 / 小学 / 中学 / 加油站 / 陵园。
+   * 实测 no_data、只能靠关键词的：消防队、消防站、派出所、警务站、体育场、
+   * 菜市场、农贸市场、公交站、变电站、垃圾站、环卫设施、殡仪馆。
+   * 中小学必须拆两条：高德的「小学」和「中学」是两个独立类型，合不进一次请求。 */
   var QUERIES = [
-    { id: 'medical',      label: '医院',         kw: '综合医院|医院',                       radius: 5000 },
-    { id: 'clinic',       label: '社区卫生服务', kw: '社区卫生服务中心|社区卫生服务站|社区医院', radius: 3000 },
-    { id: 'pharmacy',     label: '药店',         kw: '药店|药房',                           radius: 1500 },
-    { id: 'fire',         label: '消防救援',     kw: '消防救援站|消防队|消防站',            radius: 6000 },
-    { id: 'police',       label: '警务资源',     kw: '派出所|警务站|警务工作室',            radius: 3000 },
-    { id: 'shelter',      label: '开阔地',       kw: '公园|广场|体育场',                    radius: 3000 },
-    { id: 'supermarket',  label: '超市',         kw: '超市|生鲜超市|生活超市',              radius: 2000 },
-    { id: 'convenience',  label: '便利店',       kw: '便利店|便民商店|小卖部|食杂店',       radius: 1500, pages: 2 },
-    { id: 'market',       label: '菜市场',       kw: '菜市场|农贸市场|生鲜市场',            radius: 2000 },
-    { id: 'metro',        label: '地铁站',       kw: '地铁站',                              radius: 3000 },
-    { id: 'bus',          label: '公交站',       kw: '公交站',                              radius: 1000 },
-    { id: 'school',       label: '中小学',       kw: '小学|中学|九年一贯制',                radius: 2000 },
-    { id: 'gas',          label: '加油站',       kw: '加油站|加气站',                       radius: 1500 },
-    { id: 'substation',   label: '变电站',       kw: '变电站|变电所',                       radius: 1500 },
-    { id: 'refuse',       label: '垃圾站',       kw: '垃圾站|垃圾中转站|垃圾楼|环卫站',     radius: 1500 },
-    { id: 'funeral',      label: '殡葬设施',     kw: '殡仪馆|殡葬|陵园|公墓|骨灰堂',        radius: 3000 }
+    /* 医院是唯一不能用 type 检索的类别：高德的「医院」类型把医美、口腔、诊所、
+     * 社区卫生服务中心全算进去，5 km 内 600 条，而类型检索是按距离排序的，
+     * 前 100 条被近处的诊所填满，真正的大医院一条都进不来（实测 firstBig 为空）。
+     * 关键词检索按相关性排序，第一页就能召回「首都医科大学附属首都儿童医学中心」。
+     * 同理，MED_NOISE / MED_BASIC / BIG_HOSPITAL 这三层过滤专门为关键词检索设计。 */
+    { id: 'medical',      label: '医院',                         kw: '医院',                      radius: 5000, pages: 2 },
+    { id: 'clinic',       label: '社区卫生服务', type: '卫生院',   kw: '社区卫生服务中心|社区医院', radius: 3000 },
+    { id: 'pharmacy',     label: '药店',         type: '药房',     kw: '药店|药房',                 radius: 1500 },
+    { id: 'fire',         label: '消防救援',                       kw: '消防救援站|消防队|消防站',  radius: 6000 },
+    { id: 'police',       label: '警务资源',                       kw: '派出所|警务站',              radius: 3000 },
+    { id: 'shelter',      label: '开阔地',       type: '公园',     kw: '公园|广场|体育场',          radius: 3000 },
+    { id: 'supermarket',  label: '超市',         type: '超级市场', kw: '超市',                      radius: 2000, pages: 2 },
+    { id: 'convenience',  label: '便利店',       type: '便利店',   kw: '便利店',                    radius: 1500, pages: 3 },
+    { id: 'market',       label: '菜市场',                         kw: '菜市场|农贸市场',            radius: 2000 },
+    { id: 'metro',        label: '地铁站',       type: '地铁站',   kw: '地铁站',                    radius: 3000 },
+    { id: 'bus',          label: '公交站',                         kw: '公交站',                    radius: 1000 },
+    { id: 'school',       label: '小学',         type: '小学',     kw: '小学',                      radius: 2000 },
+    { id: 'school',       label: '中学',         type: '中学',     kw: '中学',                      radius: 2000 },
+    { id: 'gas',          label: '加油站',       type: '加油站',   kw: '加油站',                    radius: 1500 },
+    { id: 'substation',   label: '变电站',                         kw: '变电站|变电所',              radius: 1500 },
+    { id: 'refuse',       label: '垃圾站',                         kw: '垃圾站|垃圾中转站',          radius: 1500 },
+    { id: 'funeral',      label: '殡葬设施',     type: '陵园',     kw: '殡仪馆|陵园',                radius: 3000 }
   ];
 
   /* 检索半径是分级配置的（消防 6 km、医院 5 km、地铁/公园 3 km、便利店 1.5 km、公交 1 km），
@@ -50,7 +72,7 @@
   var RADIUS_TXT = '分级检索：公交 1 km、便利店与加油站 1.5 km、超市与菜场 2 km、公园与地铁 3 km、医院 5 km、消防 6 km';
 
   // 医疗类噪声：口腔、宠物、美容、门诊等不算可用的综合医疗资源
-  var MED_NOISE = /口腔|牙科|宠物|美容|整形|视力|眼镜|体检中心|不孕|男科|中医馆|推拿|按摩/;
+  var MED_NOISE = /口腔|牙科|宠物|美容|整形|视力|眼镜|体检|不孕|男科|中医馆|推拿|按摩|健疗|疗养|旗舰|医美|眼科|诊所/;
 
   /* ---------------- 维度定义 ---------------- */
   var DIMS = [
@@ -119,7 +141,9 @@
   var MED_BASIC = /社区卫生服务中心|卫生院|服务站|卫生室|门诊/;
   // 注：不要把「中医」算作综合医院的判定词——中医院与综合医院的急诊/手术能力不同，
   // 混在一起会出现「综合医院一栏写着中医院」这种误导。中医院按普通医疗机构参与评分。
-  var BIG_HOSPITAL = /三甲|三级|人民|大学|附属|协和|同济|省立|市立|中心|妇幼|急救|医学院/;
+  /* 注：「中心」不能单独作为判定词——「爱康君安健疗国际北京旗舰中心」这类高端体检机构
+   * 名字里也带「中心」，一旦匹配上就会被当成最近医院写进报告。必须是「中心医院」。 */
+  var BIG_HOSPITAL = /三甲|三级|人民|大学|附属|协和|同济|省立|市立|中心医院|妇幼|急救|医学院/;
   function isBigHospital(name) {
     return BIG_HOSPITAL.test(name || '');
   }
@@ -194,6 +218,27 @@
         ? (bagRaw[k] || []).filter(function (p) { return re.test(p.type || ''); })
         : (bagRaw[k] || []);
     });
+    /* 按名字再收一次口。检索放宽后，消防这一类会混进「忠实里社区义务消防队办公室」
+     * （居委会的一间办公室，20 m）和「东花市派出所消防监督」（一个岗位，不是站点），
+     * 它们按距离排在最前面，会让消防这一项直接拿满分——必须剔掉。 */
+    var NAME_DROP = {
+      fire: /办公室|消防监督|宣传|体验馆/,
+      police: /消防监督|保安|物业|停车/
+    };
+    Object.keys(NAME_DROP).forEach(function (k) {
+      var re = NAME_DROP[k];
+      poiBag[k] = (poiBag[k] || []).filter(function (p) { return !re.test(p.name || ''); });
+    });
+    // 优先取能出警的正规消防站；一个都没有时再退到微型消防站/社区消防工作站
+    var fireMain = (poiBag.fire || []).filter(function (p) {
+      return /消防救援站|消防中队|消防大队|消防支队/.test(p.name || '');
+    });
+    if (fireMain.length) poiBag.fire = fireMain;
+    // 同理，警务优先取正式派出所/公安分局，其次才是社区警务工作室
+    var policeMain = (poiBag.police || []).filter(function (p) {
+      return /派出所|公安分局/.test(p.name || '');
+    });
+    if (policeMain.length) poiBag.police = policeMain;
     // mode 只认两种口径，非法值（?mode=xxx）会让权重表变成 undefined，
     // 总分恒为 0、等级 D、权重列显示 NaN —— 这里直接兜住
     var mode = (opt.mode === 'buy') ? 'buy' : 'rent';

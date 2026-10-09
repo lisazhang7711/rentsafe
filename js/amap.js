@@ -116,8 +116,8 @@
 
   function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
-  /** 拉取某一页周边搜索结果 */
-  function searchPage(AMap, keyword, lng, lat, radius, pageIndex, pageSize) {
+  /** 拉取某一页周边搜索结果。q = { kw, type, radius } */
+  function searchPage(AMap, q, lng, lat, pageIndex, pageSize) {
     return new Promise(function (resolve) {
       var finished = false;
       var timer = setTimeout(function () {
@@ -125,11 +125,15 @@
         resolve({ err: 'timeout', pois: [] });
       }, 10000);
       try {
-        var ps = new AMap.PlaceSearch({
+        var opt = {
           pageSize: pageSize, pageIndex: pageIndex, extensions: 'base',
           citylimit: false, autoFitView: false
-        });
-        ps.searchNearBy(keyword, [lng, lat], radius, function (status, result) {
+        };
+        if (q.type) opt.type = q.type;
+        var ps = new AMap.PlaceSearch(opt);
+        /* 按类型检索时必须传空关键词：一旦同时传 keyword 和 type，
+         * 高德会按「关键词 AND 类型」收窄，反而比只查关键词还少。 */
+        ps.searchNearBy(q.type ? '' : (q.kw || ''), [lng, lat], q.radius, function (status, result) {
           if (finished) return; finished = true; clearTimeout(timer);
           if (status === 'complete' && result && result.poiList && result.poiList.pois) {
             resolve({ total: Number(result.poiList.count) || 0, pois: result.poiList.pois });
@@ -156,42 +160,64 @@
     return out;
   }
 
+  /* 翻页之间也要留间隔：实测连续请求第 2、3 页时会被高德限流返回 error，
+   * 表现为便利店数量在 50 / 94 之间随机波动（拿到 1 页还是 2 页全看运气）。 */
+  var PAGE_GAP = 260;
+
   /** 串行翻页，直到拿满 maxPage 页或该页为空 */
-  function restPages(AMap, keyword, lng, lat, radius, size, maxPage, idx, acc, total) {
+  function restPages(AMap, q, lng, lat, size, maxPage, idx, acc, total) {
     if (idx > maxPage || acc.length >= total) return Promise.resolve(acc);
-    return searchPage(AMap, keyword, lng, lat, radius, idx, size).then(function (r) {
+    return delay(PAGE_GAP).then(function () {
+      return searchPage(AMap, q, lng, lat, idx, size);
+    }).then(function (r) {
       if (r.err || !r.pois.length) return acc;
-      return restPages(AMap, keyword, lng, lat, radius, size, maxPage, idx + 1,
+      return restPages(AMap, q, lng, lat, size, maxPage, idx + 1,
         acc.concat(r.pois), total);
     });
   }
 
   /**
-   * 单次周边搜索（失败自动重试 1 次）。
-   * pages: 最多翻到第几页，默认 1。设为 2~3 可把高密度类别（便利店、超市）取全。
+   * 单次周边检索。q = { kw, type, radius, pages }
+   *
+   * 【为什么优先按 type 检索】高德的关键词召回要求 POI 名字里含有该词，
+   * 而大量门店名字里根本没有类型名：便利蜂、京客隆便利店、惠佳美食品店都没有
+   * 「便利店」三个字；叮当快药没有「药店」；北京市文汇中学没有「小学」。
+   * 实测忠实里西区同一坐标：
+   *   关键词「便利店」 → 最近一家 537 m
+   *   type=便利店      → 共 111 家，最近一家 16 m
+   * 按类型检索能一次性把这些「名不副实」的门店全部召回。
+   *
+   * 【type 不是万能的】部分类目高德没有对应类型名（消防队、派出所、菜市场、公交站、
+   * 变电站、垃圾站、殡仪馆实测均 no_data），这些只能走关键词；且同一个类型名在不同
+   * 城市可能无数据，所以 type 查回 0 条时这里会自动退回 kw，不会整类资源消失。
    */
-  function nearOnce(AMap, keyword, lng, lat, radius, pages, tryIdx) {
-    pages = Math.max(1, Math.min(3, pages || 1));
-    tryIdx = tryIdx || 0;
-    return searchPage(AMap, keyword, lng, lat, radius, 1, MAX_PAGE_SIZE).then(function (r) {
+  function nearQuery(AMap, q, lng, lat, tryIdx) {
+    var pages = Math.max(1, Math.min(3, q.pages || 1));
+    var radius = q.radius || cfg.radius;
+    var cur = { kw: q.kw || '', type: q.type || '', radius: radius };
+    return searchPage(AMap, cur, lng, lat, 1, MAX_PAGE_SIZE).then(function (r) {
       if (r.err) {
         // 只在超时 / error（多为高德 QPS 限流）时补一次，且先退避；正常空结果不重试
         return tryIdx === 0
-          ? delay(900).then(function () {
-              return nearOnce(AMap, keyword, lng, lat, radius, pages, 1);
-            })
+          ? delay(900).then(function () { return nearQuery(AMap, q, lng, lat, 1); })
           : [];
+      }
+      // 类型检索在该地无数据 → 退回关键词，保证这一类不至于整类缺失
+      if (cur.type && !r.pois.length && q.kw) {
+        return nearQuery(AMap, { kw: q.kw, radius: radius, pages: q.pages }, lng, lat, 0);
       }
       var total = r.total || r.pois.length;
       if (pages === 1) return toOut(r.pois);
-      return restPages(AMap, keyword, lng, lat, radius, MAX_PAGE_SIZE, pages, 2, r.pois, total)
+      return restPages(AMap, cur, lng, lat, MAX_PAGE_SIZE, pages, 2, r.pois, total)
         .then(function (all) { return toOut(all); });
     });
   }
 
   /** 单次关键词搜索（供外部调用，如小区名精确定位） */
   function search(kw, lng, lat, radius) {
-    return load().then(function (AMap) { return nearOnce(AMap, kw, lng, lat, radius || 3000, 1, 0); });
+    return load().then(function (AMap) {
+      return nearQuery(AMap, { kw: kw, radius: radius || 3000, pages: 1 }, lng, lat, 0);
+    });
   }
 
   /**
@@ -211,7 +237,7 @@
           if (i >= queries.length) return;
           var q = queries[i++];
           var r = q.radius || cfg.radius;
-          nearOnce(AMap, q.kw, lng, lat, r, q.pages || 1, 0)
+          nearQuery(AMap, { kw: q.kw, type: q.type, radius: r, pages: q.pages || 1 }, lng, lat, 0)
             .catch(function () { return []; })
             .then(function (list) {
               // 同一 id 的多个结果合并
