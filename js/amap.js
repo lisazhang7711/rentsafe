@@ -11,6 +11,13 @@
   /** 加载高德 JS API 2.0（含所需插件），返回 Promise */
   function load() {
     if (loaded) return loaded;
+    // 来源域名不在白名单里就别把 Key 带出去（防止站点被整站复制后继续刷这个 Key）
+    if (!cfg.hostAllowed) {
+      loaded = Promise.reject(new Error(
+        '当前域名 ' + location.hostname + ' 未在白名单内，已停止调用高德接口。' +
+        '如果你是本地调试，可在控制台执行：localStorage.setItem("rentsafe.cfg", JSON.stringify({host:location.hostname}))'));
+      return loaded;
+    }
     loaded = new Promise(function (resolve, reject) {
       if (window.AMap) return resolve(window.AMap);
       window._AMapSecurityConfig = { securityJsCode: cfg.securityJsCode };
@@ -152,6 +159,9 @@
     return load().then(function (AMap) {
       var i = 0, done = 0, out = {};
       var gap = cfg.gap || 260;
+      /* 两路并发：18 类资源串行约 20 秒，两路约 10 秒。
+         仍保留单路节流间隔，不会明显增加对高德的瞬时压力。 */
+      var CONC = 2;
       return new Promise(function (resolve) {
         function step() {
           if (i >= queries.length) return;
@@ -168,7 +178,7 @@
               else setTimeout(step, gap);
             });
         }
-        step();
+        for (var w = 0; w < CONC; w++) step();
       });
     });
   }
