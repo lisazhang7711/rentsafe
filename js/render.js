@@ -134,6 +134,29 @@
       return '<div class="alert ' + cls + '"><b>' + esc(r.t) + '</b> — ' + esc(r.d) + '</div>';
     }).join('');
 
+    /* 模式专项：租房问租约、买房问产权，这一块是两种口径真正的内容差异 */
+    var specHtml = res.spec
+      ? '<section class="card pad" style="margin-bottom:16px">' +
+          '<div class="sec-t">' + esc(modeTxt) + '专项 · ' + esc(res.spec.name) +
+            '　<span class="small muted">这项只有' + esc(modeTxt) + '口径才有</span></div>' +
+          '<div style="display:flex;align-items:center;gap:12px;margin:2px 0 12px">' +
+            '<div style="font-size:26px;font-weight:800;line-height:1;color:' + M.scoreColor(res.spec.score) + '">' +
+              res.spec.score + '</div>' +
+            '<div class="bar" style="flex:1;margin:0"><i style="width:' + res.spec.score +
+              '%;background:' + M.scoreColor(res.spec.score) + '"></i></div>' +
+            '<div class="small muted" style="white-space:nowrap">占总分 ' + res.spec.weight + '%</div>' +
+          '</div>' +
+          '<p class="hint small muted" style="margin:0 0 10px">' + esc(res.spec.intro) + '</p>' +
+          '<ul class="ev" style="margin:0">' +
+            res.spec.items.map(function (x) {
+              return '<li><b>' + esc(x.t) + '</b>' +
+                (x.cut ? ' <span style="color:#c2410c;font-weight:600">−' + x.cut + ' 分</span>' : '') +
+                '：' + esc(x.s) + '</li>';
+            }).join('') +
+          '</ul>' +
+        '</section>'
+      : '';
+
     var d = new Date();
     var stamp = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 
@@ -159,6 +182,9 @@
           '</div>' +
         '</div>' +
       '</section>' +
+
+      /* 模式专项（租房=租约稳定 / 购房=资产稳健）—— 只有当前口径才有 */
+      specHtml +
 
       /* 雷达 + 维度 */
       '<section class="card pad" style="margin-bottom:16px">' +
@@ -226,7 +252,13 @@
     L.push('综合得分：' + res.score + ' / 100（' + res.grade + ' 级）— ' + res.gradeTxt);
     L.push('');
     L.push('— 六维得分 —');
-    res.dims.forEach(function (d) { L.push(d.name + '：' + d.score + '（权重 ' + Math.round(d.weight * 100) + '%）'); });
+    res.dims.forEach(function (d) { L.push(d.name + '：' + d.score + '（占总分 ' + d.weight + '%）'); });
+    if (res.spec) {
+      L.push(res.spec.name + '：' + res.spec.score + '（' + (res.mode === 'rent' ? '租房' : '购房') + '专项，占总分 ' + res.spec.weight + '%）');
+      res.spec.items.forEach(function (x) {
+        L.push('　· ' + x.t + (x.cut ? ' −' + x.cut + ' 分' : '') + '：' + x.s);
+      });
+    }
     L.push('');
     L.push('— 最近关键点位 —');
     [['综合医院', res.facts.med], ['消防救援站', res.facts.fire], ['药店', res.facts.pharmacy],

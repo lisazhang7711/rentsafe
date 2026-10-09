@@ -84,10 +84,113 @@
     { id: 'env',   name: '环境风险', icon: '环', desc: '加油站、变电站、垃圾站、殡葬、内涝等影响' }
   ];
 
+  /* 六维基准权重（buildWeight 之后归一化，这里不必凑成 1）。
+   *
+   * 【两种口径的这组权重刻意是一样的】这是个被实测推翻过的设计。
+   * 原来的 rent/buy 权重不同（租房 safe .20/env .08，买房 safe .14/env .22），
+   * 结果在忠实里这种地方实测下来：买房 91.5 反而高于租房 91.2。原因是加权平均的性质——
+   * 六维不可能同时满分，谁把权重压在「当前较弱的维度」上，谁的总分就更低。
+   * 忠实里最弱的两维恰好是治安(82.8)和消防(96.2)，而租房最看重的就是治安，于是租房更低。
+   * 「买房口径更严格，分数却更高」是讲不通的。
+   *
+   * 而且回到底层的事实：医疗、消防、断电、治安这些都是**位置**的属性，
+   * 不因为你租还是买而变化——它们对租客和业主一样重要。
+   * 真正随交易形态变化的是两件事，各自单独处理：
+   *   ① 交易层面的风险租房 vs 买房完全不同 → 见下面的 SPEC 模式专项
+   *   ② 同样的嫌恶设施，租客承担阶段性体验损失，业主承担永久估值折损 → 见 ENV_MODE_MUL
+   * 这样两种口径的总分差就全部来自「交易本身」，方向也永远正确：
+   * 买房口径不会比租房更宽松。
+   */
   var WEIGHT = {
-    rent: { em: .20, fire: .18, power: .18, safe: .20, life: .16, env: .08 },
-    buy:  { em: .18, fire: .16, power: .14, safe: .14, life: .16, env: .22 }
+    rent: { em: .19, fire: .18, power: .18, safe: .19, life: .16, env: .10 },
+    buy:  { em: .19, fire: .18, power: .18, safe: .19, life: .16, env: .10 }
   };
+
+  /* 买房对环境嫌恶设施的扣分倍率：同样一间 150 m 外的垃圾站，
+   * 对租客是一段时间的体验损失，对业主是永久的估值折损与出手难度。
+   *
+   * 之所以要配这个倍率：环境这一维是「100 分起步往下扣」的扣分制，
+   * 单纯把权重调高，等于给「环境干净」白送一个高分项。实测忠实里（环境几乎满分）时，
+   * 旧表 env 权重 .22 vs .08 会让买房反比租房高 1.4 分——口径更严结果分更高，
+   * 这是反直觉的。改成「两边权重接近、买房扣分更狠」之后，方向就正常了。
+   */
+  var ENV_MODE_MUL = { rent: 1, buy: 1.45 };
+
+  /* ---------------- 模式专项：租约稳定 / 资产稳健 ----------------
+   * 两种口径真正的差别在这里：租房回答「能不能安稳住到期、钱会不会被套进去」，
+   * 买房回答「产权干不干净、会不会砸在手里」。这两组问题互不通用，
+   * 不像房龄 / 是否有老人那样两个口径都适用，所以各自构成一个独立的评分块。
+   * 未填写一律按「未核验」处理：买房不做产权核验本身就是重大风险，不能默认安全。
+   */
+  var SPEC_W = .20;
+  var SPEC = {
+    rent: {
+      name: '租约与租住稳定',
+      intro: '租房最现实的几个坑：还没住到期就被要求搬走、半年租金一次性套进去退不出来、隔断房被责令整改。这一块买房模式没有——买房不计租约，只计产权。'
+    },
+    buy: {
+      name: '产权与资产稳健',
+      intro: '买房的三类硬风险：产权本身带抵押查封、土地年限所剩不多、周边已知有新建嫌恶设施规划。这一块租房模式没有——租客不承担资产贬值与出手难度。'
+    }
+  };
+
+  /* 返回 {score, items:[{t,s,cut}]}；mode 已归一化 */
+  function buildSpec(mode, opt, poiBag) {
+    var items = [], base = 100;
+    function cut(n, t, s) { base -= n; items.push({ t: t, s: s, cut: n }); }
+    function plus(n, t, s) { base = Math.min(100, base + n); items.push({ t: t, s: s, cut: 0 }); }
+    function keep(t, s) { items.push({ t: t, s: s, cut: 0 }); }
+    function apply(rule) {
+      if (!rule || !rule[1]) return;
+      if (rule[0] < 0) cut(-rule[0], rule[1], rule[2]);
+      else if (rule[0] > 0) plus(rule[0], rule[1], rule[2]);
+      else keep(rule[1], rule[2]);
+    }
+
+    if (mode === 'rent') {
+      apply({
+        y2:  [2, '租期 2 年及以上', '租期长且租金锁定，短期内被要求搬走的概率低。'],
+        y1:  [0, '一年一签', '最常见的做法，但每年续约都可能被涨价或收房，留意续租条款。'],
+        short: [-14, '半年或月付短租', '稳定性最差的一类，房东随时可能收回，不适合需要长期安置的家庭。'],
+        unk: [-5, '租期未确定', '没写进合同的租期不受保护，按「有风险」计入，谈合同时务必写死起止日期。']
+      }[opt.lease]);
+      apply({
+        q:   [0, '押一付三 / 季付', '资金敞口可控，是相对安全的付款节奏。'],
+        h:   [-5, '半年付', '一次性押付半年，一旦中途出问题，追回租金的难度明显上升。'],
+        y:   [-16, '年付或一次性付多年', '租房损失最大的一类：机构跑路、房屋被变卖都可能导致钱房两空，直接列为否决项。'],
+        unk: [-5, '付款方式未谈', '尚未确认，按存在资金风险计入。']
+      }[opt.pay]);
+      if (opt.share) cut(5, '合租形态', '室友变动会直接改变居住体验与安全边界，且主力租客一旦退出，剩下的人要重新承担整套租金。');
+      if (opt.partition) cut(10, '隔断 / 群租', '隔断房在多个城市属于违规租赁，被责令整改时可限期搬离，且通常无法索赔。');
+    } else {
+      apply({
+        clear:    [3, '产权已核验无抵押查封', '已到登记机构核验，是买房流程里最该先做的一步。'],
+        mortgage: [-14, '有抵押未结清', '带抵押过户时若卖方未能如期解押，房屋可能被查封；合同里必须写明解押时点与违约责任。'],
+        unk:      [-14, '产权未核验', '买房不查产权是最大的单点风险，按「存在重大未知」计入，签约前务必去不动产登记中心拉一次产调。']
+      }[opt.title]);
+      apply({
+        fresh: [0, '剩余土地年限 50 年以上', '年限充裕，短期不必担心续期成本与估值折损。'],
+        mid:   [-4, '剩余 30–50 年', '中期会碰到年限带来的估值天花板，续期政策细节需留意。'],
+        short: [-14, '不足 30 年 / 商住 40–50 年', '年限短的房子二手折价明显、贷款年限也受限，出手难度高。'],
+        unk:   [-9, '土地年限未确认', '年限直接影响可贷年限与未来估值，未确认前按有风险计入。']
+      }[opt.tenure]);
+      apply({
+        clear: [2, '已查周边无不利规划', '已核对控制性详细规划，没有新建嫌恶设施的计划。'],
+        unk:   [-8, '周边规划未了解', '规划局官网可查控规，未查之前按存在未知计入。'],
+        risk:  [-18, '已知有新建嫌恶 / 市政设施规划', '这类规划一旦落地，居住体验与估值同时受损，且业主几乎无法追回差额。']
+      }[opt.plan]);
+      if (opt.schoolDep) {
+        var sc = nearest(poiBag.school);
+        if (sc && sc.distance <= 800) plus(2, '学区诉求：对口学校很近', '最近 ' + sc.name + '（' + fmtDist(sc.distance) + '），步行可达。');
+        else if (sc && sc.distance <= 1500) keep('学区诉求：学校 1.5 km 内', '最近 ' + sc.name + '（' + fmtDist(sc.distance) + '）。学区以当年教委划片为准，务必核实划片范围，不能只看距离。');
+        else if (sc && sc.distance <= 2500) cut(6, '学区诉求：最近学校超过 1.5 km', '最近 ' + sc.name + '（' + fmtDist(sc.distance) + '），通勤成本高，跨片入学通常不可行。');
+        else cut(14, '学区诉求：2.5 km 内未检索到中小学', '有学区诉求却检索不到对口资源，说明这个位置不符合需求，且学区随时可能重新划片。');
+      }
+    }
+    items = items.filter(function (x) { return x.t; });
+    if (!items.length) keep(mode === 'rent' ? '租约按常规处理' : '购房信息待补充', '这一块没有填到异常项，若有特殊约定请在上方补充后重跑。');
+    return { score: clamp(base, 0, 100), items: items };
+  }
 
   /* ---------------- 工具 ---------------- */
   function haversine(a, b) {
@@ -116,19 +219,43 @@
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
   function round(v) { return Math.round(v * 10) / 10; }
 
-  /** 距离 -> 基础分；thresholds 形如 [[800,100],[1500,88]]，超出取 last */
+  /* ================= 分数区分度参数 =================
+   * 这三个常量是「为什么所有城区地址都是 90 分」的直接原因，统一在这里调，
+   * 不要在 13 个 distScore 调用点分散改。
+   *
+   * MISS_SCALE：搜不到某类资源时的兜底分折算系数。原来各处直接给 40~55 分，
+   *   意味着「医院、消防、学校一个都搜不到」仍能拿到接近及格的分，
+   *   不同地址的分数被压在 90 分一条线上挤成一团。折算后落到 22~30 分区间。
+   * EXCEED_CUT：超出最远阈值后的掉档幅度。原来只扣 8 分，
+   *   5 km 的医院和 40 km 的医院几乎同分，地址信息全在这一步被抹平。
+   * DENSITY_TIERS：数量加成阶梯。原来是「n × unit 封顶」，便利店 5 家即加满，
+   *   城区每个地址都白拿同一个满分，密度这一项完全没有区分能力。
+   */
+  var MISS_SCALE = .55;
+  var EXCEED_CUT = 18;
+  var DENSITY_TIERS = {
+    store: [[0, 0], [1, .6], [4, 1.2], [10, 2.0], [25, 2.8], [60, 4.0]],
+    drug:  [[0, 0], [1, 1],  [3, 2.0],  [6, 3.0],  [13, 4.0], [26, 5.0]]
+  };
+  /** 取 ≤n 的最高一档加成；数组已按 [阈值, 加成] 升序排列 */
+  function tierBonus(n, tiers) {
+    var v = 0;
+    for (var i = 0; i < tiers.length; i++) if (n >= tiers[i][0]) v = tiers[i][1];
+    return v;
+  }
+
+  /** 距离 -> 基础分；thresholds 形如 [[800,100],[1500,88]]，超出取 last - EXCEED_CUT */
   function distScore(list, thresholds, missScore) {
-    if (!list || !list.length) return missScore == null ? 45 : missScore;
+    if (!list || !list.length) return Math.round((missScore == null ? 45 : missScore) * MISS_SCALE);
     var d = list[0].distance;
     for (var i = 0; i < thresholds.length; i++) {
       if (d <= thresholds[i][0]) return thresholds[i][1];
     }
-    return thresholds[thresholds.length - 1][1] - 8;
+    return Math.max(0, thresholds[thresholds.length - 1][1] - EXCEED_CUT);
   }
-  /** 数量加成：越多越好，最多 +9 */
-  function densityBonus(list, unit, cap) {
-    var n = (list || []).length;
-    return Math.min(cap == null ? 9 : cap, n * (unit || 1.5));
+  /** 数量加成：按阶梯取分，越密集越难加满 */
+  function densityBonus(list, kind) {
+    return tierBonus((list || []).length, DENSITY_TIERS[kind] || DENSITY_TIERS.store);
   }
   function nearest(list) { return list && list.length ? list[0] : null; }
   function scoreColor(v) {
@@ -256,7 +383,7 @@
     var sEm = clamp(clamp(medBase * .55 +
                     distScore(poiBag.clinic, [[500, 100], [1000, 90], [1800, 78]], 52) * .25 +
                     distScore(poiBag.pharmacy, [[200, 100], [500, 90], [1000, 78]], 55) * .20, 0, 95) +
-                    densityBonus(poiBag.pharmacy, 1.0, 5), 0, 100);
+                    densityBonus(poiBag.pharmacy, 'drug'), 0, 100);
     // 家中有老人 / 需电设备 / 幼儿时，医院远一点更致命
     if ((opt.elderly || opt.device) && nm && nm.distance > 2000) sEm -= 6;
     if (opt.toddler && nm && nm.distance > 3000) sEm -= 4;
@@ -310,7 +437,7 @@
       distScore(poiBag.market, [[500, 100], [1000, 88], [1800, 75]], 48) * .28 +
       distScore(poiBag.convenience, [[200, 100], [500, 88], [1000, 76]], 48) * .26 +
       distScore(poiBag.pharmacy, [[200, 100], [500, 90], [1000, 78]], 52) * .12, 0, 96) +
-      densityBonus(poiBag.convenience, 0.8, 4), 0, 100);
+      densityBonus(poiBag.convenience, 'store'), 0, 100);
     if (opt.elevator === 'none' && h.floor >= 7) sPower -= 9;
     if (opt.elevator === 'flaky' && h.floor >= 7) sPower -= 5;
     if (opt.age != null && Number(opt.age) >= 30) sPower -= 5;
@@ -375,12 +502,16 @@
         (hasKid ? '（家中有幼儿，此项权重已上调）' : '')
     ];
 
-    /* —— 环境风险（扣分制）—— */
+    /* —— 环境风险（扣分制）——
+     * ENV_MODE_MUL：同样的嫌恶设施，买房口径扣得更狠。
+     * 注意只对「扣分」生效，不会因为环境干净而给买房额外加分。 */
+    var envMul = ENV_MODE_MUL[mode] || 1;
     var sEnv = 100, envHits = [];
     function penalty(list, label, near, mid, maxCut) {
       if (!list || !list.length) return;
       var d = list[0].distance;
       var cut = d <= near ? maxCut : d <= mid ? maxCut * .55 : maxCut * .2;
+      cut *= envMul;
       sEnv -= cut;
       envHits.push({ label: label, name: list[0].name, distance: d, cut: Math.round(cut) });
     }
@@ -388,9 +519,9 @@
     penalty(poiBag.substation, '变电站', 150, 400, 14);
     penalty(poiBag.refuse, '垃圾站/污水处理', 150, 400, 16);
     penalty(poiBag.funeral, '殡葬设施', 400, 1000, 10);
-    if (opt.flood) sEnv -= 10;                 // 曾发生内涝/积水
-    if (opt.basement) sEnv -= 4;               // 地下空间额外叠加
-    if (opt.topfloor && opt.age != null && Number(opt.age) >= 20) sEnv -= 3;  // 老房顶层渗漏
+    if (opt.flood) sEnv -= 10 * envMul;         // 曾发生内涝/积水
+    if (opt.basement) sEnv -= 4 * envMul;       // 地下空间额外叠加
+    if (opt.topfloor && opt.age != null && Number(opt.age) >= 20) sEnv -= 3 * envMul;  // 老房顶层渗漏
     sEnv = clamp(sEnv, 0, 100);
     ev.env = (envHits.length
       ? envHits.map(function (x) { return x.label + '：' + x.name + '（' + fmtDist(x.distance) + '）'; })
@@ -399,10 +530,16 @@
 
     S = { em: sEm, fire: sFire, power: sPower, safe: sSafe, life: sLife, env: sEnv };
 
-    /* —— 总分 —— */
-    var total = 0;
-    for (var k in W) total += S[k] * W[k];
-    total = round(clamp(total, 0, 100));
+    /* —— 模式专项（租房=租约稳定 / 买房=资产稳健）—— */
+    var spec = buildSpec(mode, opt, poiBag);
+    var specName = SPEC[mode].name;
+
+    /* —— 总分 ——
+     * 六维占 (1-SPEC_W)，模式专项占 SPEC_W。放在加权和里而不是最后加减，
+     * 是为了让专项的影响可以被量化地说出来：「这一块占总分的 15%」。 */
+    var baseScore = 0;
+    for (var k in W) baseScore += S[k] * W[k];
+    var total = round(clamp(baseScore * (1 - SPEC_W) + spec.score * SPEC_W, 0, 100));
 
     var grade = total >= 85 ? 'A' : total >= 70 ? 'B' : total >= 55 ? 'C' : 'D';
     var GRADE_TXT = {
@@ -412,16 +549,19 @@
       D: '关键保障缺失较多，除非价格极低否则不建议'
     };
 
-    /* —— 排序找出亮点与短板 —— */
+    /* —— 排序找出亮点与短板 ——
+     * 显示的权重是「在总分里的实际占比」，所以要乘上 (1-SPEC_W)；
+     * 剩下的 SPEC_W 归模式专项，六维加起来不再是 100%。 */
     var arr = DIMS.map(function (d) {
       return {
         id: d.id, name: d.name, score: round(S[d.id]),
-        weight: Math.round(W[d.id] * 100), evidences: ev[d.id], desc: d.desc
+        weight: Math.round(W[d.id] * (1 - SPEC_W) * 100), evidences: ev[d.id], desc: d.desc
       };
     });
     var sorted = arr.slice().sort(function (a, b) { return b.score - a.score; });
     var highlights = sorted.slice(0, 2).map(function (x) { return x.name + ' ' + x.score + ' 分'; });
     var gaps = sorted.slice(-2).reverse().map(function (x) { return x.name + ' ' + x.score + ' 分'; });
+    if (spec.score < 70) gaps.push(specName + ' ' + spec.score + ' 分');
 
     /* —— 风险项 —— */
     var risks = [];
@@ -453,8 +593,27 @@
     if (opt.age != null && Number(opt.age) >= 30) risk('warn', '房龄偏老', '建成约 ' + opt.age + ' 年，重点关注供电容量、给排水管锈蚀、燃气软管与外墙保温层。');
     if (opt.share) risk('warn', '合租安全边界', '合租需确认门锁是否可反锁、插座与大功率电器使用规则、陌生人进出管理。');
     envHits.forEach(function (x) {
-      if (x.distance <= (x.label === '殡葬设施' ? 400 : 150)) risk('warn', '嫌恶设施过近', x.label + '「' + x.name + '」距目标约 ' + fmtDist(x.distance) + '，可能影响居住体验与资产估值。');
+      if (x.distance <= (x.label === '殡葬设施' ? 400 : 150))
+        risk('warn', '嫌恶设施过近', x.label + '「' + x.name + '」距目标约 ' + fmtDist(x.distance) +
+          '，' + (mode === 'buy' ? '买房口径下按 ' + ENV_MODE_MUL.buy + ' 倍计扣分——它会长期挂在估值上。' : '可能影响居住体验。'));
     });
+
+    /* —— 模式专项带来的风险项（这是两种口径最主要的内容差异）—— */
+    spec.items.forEach(function (x) {
+      if (x.cut >= 14) risk('dan', specName + '：' + x.t, x.s);
+      else if (x.cut >= 5) risk('warn', specName + '：' + x.t, x.s);
+    });
+    if (mode === 'buy' && opt.title === 'unk')
+      risk('dan', '产权未核验', '购房必须先做的一步还没做。拿身份证到不动产登记中心拉一次产调，几十元可查清抵押、查封、异议登记，比任何口头承诺都可靠。');
+    if (mode === 'buy' && opt.plan === 'unk')
+      risk('warn', '控规未查', '新建变电站、垃圾转运站、高架匝道这类规划一旦落地很难逆转。规划局官网查控制性详细规划，重点看周边 1 km 的市政设施用地。');
+    if (mode === 'rent' && opt.pay === 'y')
+      risk('dan', '要求年付或一次性付多年', '长租公寓暴雷、二房东卷款跑路的受害者大半栽在这一项上。哪怕月租贵一点也要坚持季付，实在要长付请走资金监管账户。');
+    if (mode === 'rent' && opt.lease === 'short')
+      risk('warn', '短租 / 月付', '短租意味着你随时要重新找房，也不受「买卖不破租赁」等长期租约的保护，有搬家预算才考虑。');
+    if (mode === 'rent' && opt.lease === 'unk' && opt.pay === 'unk')
+      risk('warn', '租约条款尚未敲定', '租期与付款方式都没确定就评估，这一块只能按有风险计入；谈拢后重跑一次，分数通常会有变化。');
+
     if (!risks.length) risk('ok', '未发现显著硬伤', '关键保障资源齐备，按下方清单做常规核实即可。');
 
     /* —— 补充信息对评分的影响（透明化） —— */
@@ -482,6 +641,14 @@
     if (opt.flood) note('曾发生内涝：环境风险 −10，环境权重上调');
     if (opt.age != null && Number(opt.age) >= 30) note('房龄约 ' + opt.age + ' 年：消防 −6、断电 −5');
 
+    /* —— 模式专项对总分的影响（透明化）—— */
+    spec.items.forEach(function (x) {
+      if (x.cut > 0) note(specName + '：' + x.t + ' −' + x.cut + ' 分（该项占总分 ' + Math.round(SPEC_W * 100) + '%）');
+    });
+    note('本次口径为「' + (mode === 'rent' ? '租房' : '购房') + '」：' + specName + '这一块占总分 ' +
+      Math.round(SPEC_W * 100) + '%，是另一口径没有的评估项。');
+    if (mode === 'buy') note('购房口径：环境嫌恶设施按 ' + ENV_MODE_MUL.buy + ' 倍计扣分（对租客是阶段性损失，对业主是永久估值折损）');
+
     /* —— 清单 —— */
     var p72 = buildPower72(poiBag, opt, R, h);
     var visit = buildVisit(mode, opt, poiBag, R, h);
@@ -498,6 +665,12 @@
       mode: mode, score: total, grade: grade, gradeTxt: GRADE_TXT[grade],
       dims: arr, highlights: highlights, gaps: gaps, risks: risks,
       envHits: envHits, power72: p72, visit: visit, weight: W, env: opt, notes: notes,
+      spec: {
+        name: specName, intro: SPEC[mode].intro,
+        score: round(spec.score), items: spec.items,
+        weight: Math.round(SPEC_W * 100)
+      },
+      baseScore: round(baseScore),
       facts: {
         med: withRoute(nm, R.med),
         fire: withRoute(nf, R.fire),

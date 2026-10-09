@@ -34,6 +34,9 @@
           <button data-mode="rent" class="on">我要租房</button>
           <button data-mode="buy">我要买房</button>
         </div>
+        <p class="hint small muted" style="margin:-6px 0 14px" id="modeHint">
+          租房会问租期与付款方式，购房会问产权、土地年限与周边规划——这两组题互不通用，各自占总分 20%。
+        </p>
 
         <div class="field ac-wrap">
           <label for="addrInput">小区名 / 详细地址</label>
@@ -52,6 +55,74 @@
         <details class="opt" style="margin-bottom:14px">
           <summary>补充房屋信息（选填，填了才准）</summary>
           <div class="body">
+
+            <!-- 模式专项：两种口径问的问题不一样，这是它们最主要的内容差异 -->
+            <div class="opt-grp" id="specTitle">租房专项 · 租约与租住稳定（占总分 20%）</div>
+
+            <div id="rentOnly">
+              <div class="field-row">
+                <div class="field">
+                  <label for="optLease">打算签多久</label>
+                  <select id="optLease">
+                    <option value="unk" selected>未确定</option>
+                    <option value="y2">2 年及以上</option>
+                    <option value="y1">一年一签</option>
+                    <option value="short">半年 / 月付短租</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="optPay">房东要求的付款方式</label>
+                  <select id="optPay">
+                    <option value="unk" selected>还没谈</option>
+                    <option value="q">押一付三 / 季付</option>
+                    <option value="h">半年付</option>
+                    <option value="y">年付或一次性付多年</option>
+                  </select>
+                </div>
+              </div>
+              <p class="hint small muted" style="margin:-4px 0 0">
+                租期与付款方式决定你能不能安稳住到期、钱会不会被套进去——这是租房独有的风险，买房模式没有这一块。
+              </p>
+            </div>
+
+            <div id="buyOnly" class="hidden">
+              <div class="field-row">
+                <div class="field">
+                  <label for="optTitle">产权核验</label>
+                  <select id="optTitle">
+                    <option value="unk" selected>还没核验</option>
+                    <option value="clear">已核验无抵押查封</option>
+                    <option value="mortgage">有抵押未结清</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="optTenure">土地剩余年限</label>
+                  <select id="optTenure">
+                    <option value="unk" selected>未确认</option>
+                    <option value="fresh">50 年以上</option>
+                    <option value="mid">30–50 年</option>
+                    <option value="short">不足 30 年 / 商住</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field-row">
+                <div class="field">
+                  <label for="optPlan">周边规划是否查过</label>
+                  <select id="optPlan">
+                    <option value="unk" selected>未了解</option>
+                    <option value="clear">已查无不利规划</option>
+                    <option value="risk">已知有新建嫌恶 / 市政设施规划</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label class="small muted">学区诉求</label>
+                  <label class="chk" style="margin-top:6px"><input type="checkbox" id="optSchoolDep"> 买房主要为了孩子上学</label>
+                </div>
+              </div>
+              <p class="hint small muted" style="margin:-4px 0 0">
+                产权、年限、规划决定这套房会不会砸在手里——资产贬值与出手难度只有业主承担，租房模式没有这一块。
+              </p>
+            </div>
 
             <div class="opt-grp">楼栋与户型</div>
             <div class="field-row">

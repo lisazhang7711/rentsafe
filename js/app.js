@@ -42,11 +42,25 @@
     document.querySelectorAll('.modes button').forEach(function (b) {
       b.classList.toggle('on', b.dataset.mode === m);
     });
+    // 合租 / 隔断只适用于租房口径
     ['optShare', 'optPartition'].forEach(function (id) {
       var el = $(id); if (!el) return;
       var box = el.closest('.chk') || el.closest('.field');
       if (box) box.style.display = m === 'rent' ? '' : 'none';
     });
+    // 模式专项表单：租房显示租约组、买房显示产权组，标题同步
+    var isBuy = m === 'buy';
+    [['rentOnly', !isBuy], ['buyOnly', isBuy]].forEach(function (p) {
+      var el = $(p[0]);
+      if (el) el.classList.toggle('hidden', !p[1]);
+    });
+    var st = $('specTitle');
+    if (st) st.textContent = isBuy ? '购房专项 · 产权与资产稳健（占总分 20%）'
+                                   : '租房专项 · 租约与租住稳定（占总分 20%）';
+    var mh = $('modeHint');
+    if (mh) mh.textContent = isBuy
+      ? '购房口径会问产权核验、土地剩余年限与周边规划，这一块占总分 20%；嫌恶设施的扣分也按 1.45 倍计入（它影响的是永久估值，不是阶段性体验）。'
+      : '租房口径会问租期长短与房东要求的付款方式，这一块占总分 20%；这两个问题决定你能不能安稳住到期、钱会不会被套进去。';
   }
 
   /* ---------------- 地址联想 ---------------- */
@@ -177,7 +191,14 @@
       child: $('optChild').checked,
       disabled: $('optDisabled').checked,
       device: $('optDevice').checked,
-      pet: $('optPet').checked
+      pet: $('optPet').checked,
+      // 模式专项字段：租房问租约与付款，买房问产权与规划，两组问题互不通用
+      lease: $('optLease') ? $('optLease').value : 'unk',
+      pay: $('optPay') ? $('optPay').value : 'unk',
+      title: $('optTitle') ? $('optTitle').value : 'unk',
+      tenure: $('optTenure') ? $('optTenure').value : 'unk',
+      plan: $('optPlan') ? $('optPlan').value : 'unk',
+      schoolDep: $('optSchoolDep') ? $('optSchoolDep').checked : false
     };
 
     // 地址去重拼接，避免出现「北京市朝阳区北京市朝阳区…」
