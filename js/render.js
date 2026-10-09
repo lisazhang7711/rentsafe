@@ -128,7 +128,8 @@
           '<div>' +
             '<h3>' + esc(place.title) + ' <span class="grade ' + res.grade + '">' + res.grade + ' 级</span></h3>' +
             '<p>' + esc(res.gradeTxt) + '。本次按「' + modeTxt + '」口径评估，' +
-              '共检索 3 km 内 ' + Object.keys(res.poiBag).length + ' 类生活与应急资源。</p>' +
+              '共检索分级半径内（' + (RS.model.RADIUS_TXT || '1–6 km') + '）' +
+              Object.keys(res.poiBag).length + ' 类生活与应急资源。</p>' +
             '<div class="tagline">' +
               '<span class="tag">优势：' + esc(res.highlights.join(' · ')) + '</span>' +
               '<span class="tag">短板：' + esc(res.gaps.join(' · ')) + '</span>' +
@@ -187,8 +188,11 @@
 
       /* 页脚 */
       '<div class="foot-note">' +
-        '生成时间：' + stamp + '　|　坐标：' + place.lng.toFixed(6) + ', ' + place.lat.toFixed(6) + '<br>' +
-        '数据来源：高德开放平台 POI 检索（半径 3 km）与路径规划（步行 / 驾车）。' +
+        '生成时间：' + stamp + '　|　坐标：' +
+        (place.lng != null && place.lat != null
+          ? place.lng.toFixed(6) + ', ' + place.lat.toFixed(6)
+          : '未定位') + '<br>' +
+        '数据来源：高德开放平台 POI 检索（' + (RS.model.RADIUS_TXT || '分级半径') + '）与路径规划（步行 / 驾车）。' +
         '「直线」为两点间空中距离，「实际路径」为路网规划结果；未取到路网时不作折算。' +
         '评分为公开数据推导的参考值，不替代消防验收、房屋质量检测与专业评估；' +
         '实际决策请以实地勘察与官方登记信息为准。' +
