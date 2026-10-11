@@ -201,8 +201,10 @@ details.opt .body{padding:4px 14px 14px}
 
 .dims{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:18px}
 @media(max-width:760px){.dims{grid-template-columns:repeat(2,1fr)}}
-/* 手机窄屏：报告页的六维卡片单列更好读 */
+/* 手机窄屏：报告页的维度卡片单列更好读 */
 @media(max-width:560px){.dims.dims-2{grid-template-columns:1fr}}
+/* 维度数为奇数时（现在是五维），最后一张卡片占满整行，避免右下角留一个空格 */
+.dims.dims-2 .dim:last-child:nth-child(odd){grid-column:1/-1}
 .dim{border:1px solid var(--line);border-radius:12px;padding:13px 15px;background:#fff}
 .dim .dh{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}
 .dim .dn{font-weight:650;font-size:14px}
