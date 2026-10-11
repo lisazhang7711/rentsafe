@@ -390,6 +390,22 @@
       return /派出所|公安分局/.test(p.name || '');
     });
     if (policeMain.length) poiBag.police = policeMain;
+    /* 殡葬设施口径收口（2026-10-11 用户反馈：日坛公园「马骏烈士之墓」被误标为殡葬设施）。
+     * 烈士墓、纪念碑是**纪念设施**，不涉及殡仪服务与日常祭扫车流，不是殡葬设施，
+     * 不应计入环境维扣分。判定规则：名字带烈士 / 军人 / 纪念类字样、
+     * 且不像真正的墓地（陵园 / 公墓 / 墓园）或殡仪馆的，单独摘到 memorial 留档展示；
+     * 「烈士陵园」这类确实是墓地的仍按殡葬口径计。 */
+    var MEMORIAL_HINT = /烈士|军人|纪念/;
+    var FUNERAL_GROUND = /殡仪馆|陵园|公墓|墓园|骨灰|安息堂|集中安葬/;
+    var funeralAll = poiBag.funeral || [];
+    poiBag.memorial = funeralAll.filter(function (p) {
+      var n = p.name || '';
+      return MEMORIAL_HINT.test(n) && !FUNERAL_GROUND.test(n);
+    });
+    poiBag.funeral = funeralAll.filter(function (p) {
+      var n = p.name || '';
+      return !(MEMORIAL_HINT.test(n) && !FUNERAL_GROUND.test(n));
+    });
     // mode 只认两种口径，非法值（?mode=xxx）会让权重表变成 undefined，
     // 总分恒为 0、等级 D、权重列显示 NaN —— 这里直接兜住
     var mode = (opt.mode === 'buy') ? 'buy' : 'rent';
@@ -571,7 +587,7 @@
     penalty(poiBag.refuse, '垃圾站/污水处理', 150, 400, 16, 150,
       '异味、蚊蝇与清运车早间噪声是长期且确定的影响，夏季与低楼层尤其明显；距离越近越难靠关窗解决。');
     penalty(poiBag.funeral, '殡葬设施', 400, 1000, 10, 400,
-      '不构成任何安全威胁，计入环境维是因为它确实影响心理感受与二手房估值——介不介意取决于你自己，看房时建议白天与傍晚各去一次。');
+      '它不构成任何安全威胁——计入环境维不是「有危险」，而是它确实影响长期居住的心理感受与二手房估值（属于「你知道了可能会介意」的信息），介不介意取决于你自己，看房时建议白天与傍晚各去一次。口径只含殡仪馆、陵园、公墓等殡仪与安葬设施；烈士墓、纪念碑等属于纪念设施，不在此口径内、不计分。');
     if (opt.flood) sEnv -= 10 * envMul;         // 曾发生内涝/积水
     if (opt.basement) sEnv -= 4 * envMul;       // 地下空间额外叠加
     if (opt.topfloor && opt.age != null && Number(opt.age) >= 20) sEnv -= 3 * envMul;  // 老房顶层渗漏
