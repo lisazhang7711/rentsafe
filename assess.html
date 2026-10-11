@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>房屋安全评估 · 安居安全评估</title>
 <meta name="description" content="输入小区名或地址，约 20 秒生成应急医疗、消防安全、断电韧性、治安门禁、生活保障、环境风险六维安全评估报告。">
-<link rel="stylesheet" href="css/style.css?v=4">
+<link rel="stylesheet" href="css/style.css?v=5">
 </head>
 <body>
 
@@ -244,9 +244,17 @@
       </section>
 
       <section class="card pad">
-        <div class="sec-t">位置确认</div>
+        <div class="sec-t">位置确认 <span class="muted" style="text-transform:none;letter-spacing:0">（可手动微调）</span></div>
         <div class="mini-map" id="miniMap"></div>
-        <p class="hint small muted" style="margin-top:8px">绿点为目标位置，评估完成后会标出医院、消防站、避难场所、超市、地铁、警务点。</p>
+        <p class="hint small muted" style="margin-top:8px">
+          绿点为目标位置，评估完成后会标出医院、消防站、避难场所、超市、地铁、警务点。<br>
+          地理编码有时会落在小区门口或路口：<b>直接拖动绿点</b>（或点一下地图）挪到你要评估的那栋楼，再重算——差几十米对「最近点位」的影响很明显。
+        </p>
+        <div id="adjustBar" style="display:none;margin-top:10px;gap:8px;flex-wrap:wrap;align-items:center">
+          <span class="tag" id="adjustTip" style="background:#fdf1e7;color:#c2410c">位置已手动调整</span>
+          <button class="btn sm" id="btnRerun">按新位置重算</button>
+          <button class="btn sm gray" id="btnResetPos">恢复初始定位</button>
+        </div>
       </section>
 
       <section class="card pad">
@@ -275,11 +283,11 @@
   </div>
 </div>
 
-<script src="js/config.js?v=4"></script>
-<script src="js/amap.js?v=4"></script>
-<script src="js/model.js?v=4"></script>
-<script src="js/render.js?v=4"></script>
-<script src="js/app.js?v=4"></script>
+<script src="js/config.js?v=5"></script>
+<script src="js/amap.js?v=5"></script>
+<script src="js/model.js?v=5"></script>
+<script src="js/render.js?v=5"></script>
+<script src="js/app.js?v=5"></script>
 
 
 
