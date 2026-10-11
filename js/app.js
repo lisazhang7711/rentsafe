@@ -7,7 +7,10 @@
   var $ = function (id) { return document.getElementById(id); };
   var esc = RS.render.esc;
 
-  var state = { mode: 'rent', place: null, result: null, map: null, markers: [] };
+  // homeMarker：目标位置那个可拖动的绿点，单独管理（其余点位仍放 state.markers）
+  // originPlace：地理编码给出的初始定位，供「恢复初始定位」用
+  var state = { mode: 'rent', place: null, result: null, map: null, markers: [],
+                homeMarker: null, originPlace: null, adjusted: false };
 
   // 医疗类噪声：统一用 model 里的那份，避免两边正则不一致导致
   // 「评分取的点」和「算路径的点」不是同一家机构
@@ -119,16 +122,78 @@
     $('placeName').textContent = p.title;
     $('placeAddr').textContent = p.addr;
     $('btnRun').disabled = false;
+    // 换地址（而不是拖动微调）时，重置初始定位基准
+    if (!state.originPlace || state.originPlace.title !== p.title) {
+      state.originPlace = { title: p.title, addr: p.addr, lng: p.lng, lat: p.lat };
+      state.adjusted = false;
+    }
     if (state.map) {
       state.map.setCenter([p.lng, p.lat]);
-      state.map.setZoom(15);
+      state.map.setZoom(16);   // 微调要看得清楼栋，比原来的 15 再近一级
       clearMarkers();
-      addMarker(p.lng, p.lat, p.title, '#0f6b5c');
+      addHomeMarker(p.lng, p.lat, p.title);
     }
   }
   function clearMarkers() {
     state.markers.forEach(function (m) { state.map.remove(m); });
     state.markers = [];
+    if (state.homeMarker) {
+      try { state.map.remove(state.homeMarker); } catch (e) {}
+      state.homeMarker = null;
+    }
+  }
+
+  /* ---------------- 位置手动调整 ----------------
+   * 地理编码经常落在小区门口、路口甚至隔壁街区，直接用它算距离会系统性偏大。
+   * 所以目标点做成可拖动的：拖动 / 点地图都能挪，挪完必须重新评估（结果不会自动跟着变）。 */
+  function addHomeMarker(lng, lat, title) {
+    if (!state.map || !window.AMap) return;
+    var mk = new AMap.Marker({
+      position: [lng, lat],
+      title: title || '目标位置',
+      draggable: true,
+      offset: new AMap.Pixel(-9, -9),
+      zIndex: 200,
+      content: '<span title="拖动我微调位置" style="display:inline-block;width:16px;height:16px;border-radius:50%;' +
+        'background:#0f6b5c;border:2px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.45);cursor:move"></span>'
+    });
+    mk.on('dragend', function () {
+      var p = mk.getPosition();
+      if (p) onAdjust(p.getLng ? p.getLng() : p.lng, p.getLat ? p.getLat() : p.lat);
+    });
+    state.map.add(mk);
+    state.homeMarker = mk;
+  }
+  function moveHome(lng, lat) {
+    if (state.homeMarker) state.homeMarker.setPosition([lng, lat]);
+    else addHomeMarker(lng, lat, state.place && state.place.title);
+    onAdjust(lng, lat);
+  }
+  function onAdjust(lng, lat) {
+    if (!state.place) return;
+    state.place.lng = lng; state.place.lat = lat;
+    state.place.adjusted = true; state.adjusted = true;
+    var bar = $('adjustBar'); if (bar) bar.style.display = 'flex';
+    var tip = $('adjustTip');
+    if (tip) tip.textContent = '位置已手动调整（' + lng.toFixed(6) + ', ' + lat.toFixed(6) + '）';
+    var coord = lng.toFixed(6) + ', ' + lat.toFixed(6);
+    $('placeAddr').textContent = '已手动微调 · ' + coord + '（正在取回地址…）';
+    G.regeocode(lng, lat).then(function (r) {
+      if (state.place && state.place.adjusted) state.place.addr = r.name || state.place.addr;
+      $('placeAddr').textContent = '已手动微调 · ' + (r.name || coord);
+    }).catch(function () {
+      $('placeAddr').textContent = '已手动微调 · ' + coord;
+    });
+    toast('位置已调整，点「按新位置重算」更新报告');
+  }
+  function resetPos() {
+    if (!state.originPlace) return;
+    state.place = { title: state.originPlace.title, addr: state.originPlace.addr,
+                    lng: state.originPlace.lng, lat: state.originPlace.lat };
+    state.adjusted = false;
+    afterLocate();
+    var bar = $('adjustBar'); if (bar) bar.style.display = 'none';
+    toast('已恢复初始定位');
   }
   function addMarker(lng, lat, title, color) {
     if (!state.map || !window.AMap) return;
@@ -282,7 +347,7 @@
       // 地图上标出关键点位
       if (state.map) {
         clearMarkers();
-        addMarker(r.place.lng, r.place.lat, r.place.title, '#0f6b5c');
+        addHomeMarker(r.place.lng, r.place.lat, r.place.title);
         var colors = { med: '#b42318', fire: '#c2410c', shelter: '#1a7f37', supermarket: '#0f6b5c', metro: '#1d4ed8', police: '#4338ca' };
         ['med', 'fire', 'shelter', 'supermarket', 'metro', 'police'].forEach(function (k) {
           var f = res.facts[k]; if (f) addMarker(f.lng, f.lat, f.name, colors[k] || '#666');
@@ -290,6 +355,8 @@
       }
       $('progWrap').classList.add('hidden');
       $('btnRun').disabled = false;
+      // 报告已按当前坐标算完，微调提示条收起
+      var ab = $('adjustBar'); if (ab) ab.style.display = 'none';
       try {
         history.replaceState(null, '', '?addr=' + encodeURIComponent($('addrInput').value.trim()) + '&mode=' + state.mode);
       } catch (e) {}
@@ -430,8 +497,17 @@
 
     G.initMap($('miniMap'), 116.4074, 39.9042, 11).then(function (map) {
       state.map = map;
+      // 点地图也能挪位置（比拖点更省事），但必须先有目标位置
+      map.on('click', function (e) {
+        if (!e || !e.lnglat) return;
+        if (!state.place) return toast('先输入小区名或地址，再点地图微调');
+        moveHome(e.lnglat.getLng(), e.lnglat.getLat());
+      });
       if (state.place && state.place.lng) afterLocate();
     }).catch(function () {});
+
+    var br = $('btnRerun'); if (br) br.onclick = function () { run(); };
+    var bp2 = $('btnResetPos'); if (bp2) bp2.onclick = resetPos;
 
     // URL 直达
     var q = new URLSearchParams(location.search).get('addr');
