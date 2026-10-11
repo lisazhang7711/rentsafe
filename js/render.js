@@ -78,10 +78,10 @@
       'style="max-width:330px;display:block;margin:0 auto;overflow:visible">' + g + labels + '</svg>';
   }
 
-  /* 关键点位表：直线距离 与 实际路网距离/耗时 分列 */
+  /* 关键点位表：直线距离 与 实际路网距离/耗时 分列；最后一列给出可点击核查的来源 */
   function poiTable(rows) {
     var h = '<table class="poi"><thead><tr><th>类别</th><th>最近点位</th>' +
-      '<th class="d">直线</th><th class="d">实际路径</th></tr></thead><tbody>';
+      '<th class="d">直线</th><th class="d">实际路径</th><th>来源 / 核查</th></tr></thead><tbody>';
     rows.forEach(function (r) {
       var rt = r.r ? M.routeTxt(r.r) : '';
       var modeTxt = r.r && r.r.mode === 'drive'
@@ -90,9 +90,75 @@
       h += '<tr><td>' + esc(r.k) + modeTxt + '</td>' +
         '<td>' + (r.v ? esc(r.v) : '<span class="muted">未检索到</span>') + '</td>' +
         '<td class="d">' + (r.d != null ? fmt(r.d) : '—') + '</td>' +
-        '<td class="d">' + (rt ? '<b>' + esc(rt) + '</b>' : '<span class="muted">—</span>') + '</td></tr>';
+        '<td class="d">' + (rt ? '<b>' + esc(rt) + '</b>' : '<span class="muted">—</span>') + '</td>' +
+        '<td>' + (r.p ? srcLink(r.p, '核查') : '<span class="muted">—</span>') + '</td></tr>';
     });
     return h + '</tbody></table>';
+  }
+
+  /* 单条来源：高德 POI 名称/地址/坐标 + 一键在高德地图打开的核查链接 */
+  function srcLink(p, label) {
+    if (!p || p.lng == null || p.lat == null) return '<span class="muted">—</span>';
+    var href = 'https://uri.amap.com/marker?position=' + p.lng + ',' + p.lat +
+      '&name=' + encodeURIComponent(p.name || '') + '&coordinate=gaode&callnative=0';
+    var tip = [p.name, p.address, p.lng.toFixed(6) + ', ' + p.lat.toFixed(6)].filter(Boolean).join(' ｜ ');
+    return '<a class="src" href="' + href + '" target="_blank" rel="noopener" title="' + esc(tip) + '">' +
+      (label || '核查') + '</a>';
+  }
+
+  /* 各类别实际使用的检索半径（与 model.QUERIES 保持一致，写在报告里便于核查） */
+  var SRC_RADIUS = {
+    med: '5 km', fire: '6 km', pharmacy: '1.5 km', supermarket: '2 km', market: '2 km',
+    convenience: '1.5 km', shelter: '3 km', police: '3 km', metro: '3 km'
+  };
+
+  /* 数据来源与核查：把每个结论对应的原始 POI 摊开，能一条条点进去核对 */
+  function sourceSec(res, place, stamp) {
+    var f = res.facts;
+    var items = [
+      ['综合医院', f.med, 'med'], ['消防救援站', f.fire, 'fire'], ['药店', f.pharmacy, 'pharmacy'],
+      ['超市 / 商场', f.supermarket, 'supermarket'], ['菜市场 / 生鲜', f.market, 'market'],
+      ['便利店', f.convenience, 'convenience'], ['应急疏散开阔地', f.shelter, 'shelter'],
+      ['警务资源', f.police, 'police'], ['地铁站', f.metro, 'metro']
+    ];
+    var rows = items.map(function (it) {
+      var p = it[1];
+      var coord = p && p.lng != null ? p.lng.toFixed(6) + ', ' + p.lat.toFixed(6) : '—';
+      return '<tr><td>' + esc(it[0]) + '</td>' +
+        '<td>' + (p ? esc(p.name) : '<span class="muted">未检索到</span>') + '</td>' +
+        '<td class="mut">' + (p ? esc(p.address || '（高德未返回地址）') : '—') + '</td>' +
+        '<td class="d">' + coord + '</td>' +
+        '<td class="d">' + (SRC_RADIUS[it[2]] || '—') + '</td>' +
+        '<td>' + (p ? srcLink(p, '在高德打开') : '<span class="muted">—</span>') + '</td></tr>';
+    }).join('');
+
+    var center = (place.lng != null && place.lat != null)
+      ? place.lng.toFixed(6) + ', ' + place.lat.toFixed(6) : '未定位';
+    var centerLink = (place.lng != null && place.lat != null)
+      ? '　' + srcLink({ lng: place.lng, lat: place.lat, name: place.title, address: place.addr }, '核查评估位置') : '';
+
+    return '<section class="card pad" style="margin-bottom:16px">' +
+      '<div class="sec-t">数据来源与核查</div>' +
+      '<p class="hint small muted" style="margin:-4px 0 10px">' +
+        '这份报告的每一个距离结论都来自下面这条原始记录。点位名称、地址与坐标都是高德返回的原文，' +
+        '点「在高德打开」即可跳到高德地图核对，也可以照着地址实地或致电确认。' +
+      '</p>' +
+      '<table class="poi"><thead><tr><th>类别</th><th>点位名称（高德 POI）</th><th>POI 地址</th>' +
+        '<th class="d">坐标 (GCJ-02)</th><th class="d">检索半径</th><th>核查</th></tr></thead><tbody>' +
+        rows +
+      '</tbody></table>' +
+      '<ul class="ev" style="margin:12px 0 0">' +
+        '<li><b>数据来源：</b>高德开放平台 —— POI 周边检索（名称 / 地址 / 坐标 / 直线距离）+ 路径规划（步行 / 驾车路网距离与耗时）。</li>' +
+        '<li><b>评估位置：</b>' + esc(center) +
+          (place.adjusted ? '（<b>已手动微调</b>过，非地理编码原始结果）' : '（地理编码结果，未微调）') +
+          centerLink + '</li>' +
+        '<li><b>检索时间：</b>' + esc(stamp) + '。POI 数据存在滞后：搬迁、停业、新建未收录都会让结果偏旧，' +
+          '消防站与警务点请以官方公布和实地为准。</li>' +
+        '<li><b>坐标系：</b>GCJ-02（高德火星坐标）。直接把上面的坐标粘到 GPS / 国外地图会偏移几百米，需先转换。</li>' +
+        '<li><b>怎么核查：</b>先看点位名称与地址对不对得上，再看坐标落在哪一栋；' +
+          '若与实际不符，拖动左侧小地图的绿点重新定位后重算。</li>' +
+      '</ul>' +
+    '</section>';
   }
 
   /* 清单 */
@@ -110,15 +176,15 @@
     var modeTxt = res.mode === 'rent' ? '租房' : '购房';
     var f = res.facts;
     var rows = [
-      { k: '综合医院', v: f.med && f.med.name, d: f.med && f.med.distance, r: f.med && f.med.route },
-      { k: '消防救援站', v: f.fire && f.fire.name, d: f.fire && f.fire.distance, r: f.fire && f.fire.route },
-      { k: '药店', v: f.pharmacy && f.pharmacy.name, d: f.pharmacy && f.pharmacy.distance, r: f.pharmacy && f.pharmacy.route },
-      { k: '超市 / 商场', v: f.supermarket && f.supermarket.name, d: f.supermarket && f.supermarket.distance, r: f.supermarket && f.supermarket.route },
-      { k: '菜市场 / 生鲜', v: f.market && f.market.name, d: f.market && f.market.distance, r: f.market && f.market.route },
-      { k: '便利店', v: f.convenience && f.convenience.name, d: f.convenience && f.convenience.distance, r: f.convenience && f.convenience.route },
-      { k: '应急疏散开阔地', v: f.shelter && f.shelter.name, d: f.shelter && f.shelter.distance, r: f.shelter && f.shelter.route },
-      { k: '警务资源', v: f.police && f.police.name, d: f.police && f.police.distance, r: f.police && f.police.route },
-      { k: '地铁站', v: f.metro && f.metro.name, d: f.metro && f.metro.distance, r: f.metro && f.metro.route }
+      { k: '综合医院', v: f.med && f.med.name, d: f.med && f.med.distance, r: f.med && f.med.route, p: f.med },
+      { k: '消防救援站', v: f.fire && f.fire.name, d: f.fire && f.fire.distance, r: f.fire && f.fire.route, p: f.fire },
+      { k: '药店', v: f.pharmacy && f.pharmacy.name, d: f.pharmacy && f.pharmacy.distance, r: f.pharmacy && f.pharmacy.route, p: f.pharmacy },
+      { k: '超市 / 商场', v: f.supermarket && f.supermarket.name, d: f.supermarket && f.supermarket.distance, r: f.supermarket && f.supermarket.route, p: f.supermarket },
+      { k: '菜市场 / 生鲜', v: f.market && f.market.name, d: f.market && f.market.distance, r: f.market && f.market.route, p: f.market },
+      { k: '便利店', v: f.convenience && f.convenience.name, d: f.convenience && f.convenience.distance, r: f.convenience && f.convenience.route, p: f.convenience },
+      { k: '应急疏散开阔地', v: f.shelter && f.shelter.name, d: f.shelter && f.shelter.distance, r: f.shelter && f.shelter.route, p: f.shelter },
+      { k: '警务资源', v: f.police && f.police.name, d: f.police && f.police.distance, r: f.police && f.police.route, p: f.police },
+      { k: '地铁站', v: f.metro && f.metro.name, d: f.metro && f.metro.distance, r: f.metro && f.metro.route, p: f.metro }
     ];
     var hasRoute = rows.some(function (r) { return r.r && r.r.d; });
 
@@ -204,6 +270,9 @@
           (hasRoute ? '' : '　<span class="warn-inline">本次未取到路网结果，实际路径列为空，报告中不再出现由直线距离换算的分钟数。</span>') +
         '</p>' + poiTable(rows) +
       '</section>' +
+
+      /* 数据来源与核查（每个结论的原始 POI 都可点开核对） */
+      sourceSec(res, place, stamp) +
 
       (res.notes && res.notes.length
         ? '<section class="card pad" style="margin-bottom:16px">' +
@@ -293,7 +362,21 @@
     L.push('— 看房确认清单 —');
     res.visit.forEach(function (i) { L.push('□ ' + i.t); });
     L.push('');
-    L.push('数据来源：高德开放平台 POI 检索，仅供参考，不替代专业评估。');
+    L.push('— 数据来源与核查 —');
+    L.push('来源：高德开放平台 POI 周边检索 + 路径规划（步行 / 驾车）');
+    L.push('评估位置：' + (place.lng != null ? place.lng.toFixed(6) + ', ' + place.lat.toFixed(6) : '未定位') +
+      (place.adjusted ? '（已手动微调）' : '（未微调）'));
+    [['综合医院', res.facts.med], ['消防救援站', res.facts.fire], ['药店', res.facts.pharmacy],
+     ['超市', res.facts.supermarket], ['菜市场', res.facts.market], ['便利店', res.facts.convenience],
+     ['应急疏散开阔地', res.facts.shelter], ['警务资源', res.facts.police], ['地铁站', res.facts.metro]
+    ].forEach(function (x) {
+      var p = x[1];
+      if (!p) return L.push('· ' + x[0] + '：未检索到');
+      L.push('· ' + x[0] + '：' + p.name + '｜' + (p.address || '地址未返回') + '｜' +
+        p.lng.toFixed(6) + ',' + p.lat.toFixed(6) + '｜直线 ' + fmt(p.distance));
+    });
+    L.push('坐标系统：GCJ-02（高德），粘到 GPS 或其他地图前需转换。');
+    L.push('POI 数据存在滞后，消防站与警务点请以官方公布和实地为准；本报告仅供参考，不替代专业评估。');
     return L.join('\n');
   }
 
