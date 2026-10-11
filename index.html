@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>安居安全评估 · 租房买房前，先做一次安全体检</title>
 <meta name="description" content="输入小区名，约 20 秒生成应急医疗、消防安全、断电韧性、治安门禁、生活保障、环境风险六维安全评估报告，附断电 72 小时清单与看房确认清单。">
-<link rel="stylesheet" href="css/style.css?v=4">
+<link rel="stylesheet" href="css/style.css?v=5">
 </head>
 <body>
 
@@ -162,7 +162,11 @@
     <div class="grid2">
       <div class="card pad">
         <h4 style="margin-bottom:6px">数据来源是什么？</h4>
-        <p class="small muted">基于高德开放平台 POI 检索与路径规划，检索半径按品类分级：公交 1 km、便利店与加油站 1.5 km、超市与菜场 2 km、公园与地铁 3 km、医院 5 km、消防救援站 6 km。报告里「直线」是两点间空中距离，只用于筛选；「实际路径」是高德算出的真实步行 / 驾车路网距离与耗时。消防站与警务点按车程算，其余按步行算。所有点位名称与距离都列在报告里，你可以自己复核。</p>
+        <p class="small muted">基于高德开放平台 POI 检索与路径规划，检索半径按品类分级：公交 1 km、便利店与加油站 1.5 km、超市与菜场 2 km、公园与地铁 3 km、医院 5 km、消防救援站 6 km。报告里「直线」是两点间空中距离，只用于筛选；「实际路径」是高德算出的真实步行 / 驾车路网距离与耗时。消防站与警务点按车程算，其余按步行算。报告里专门有一节「数据来源与核查」，把每个点位的名称、POI 地址、坐标（GCJ-02）和检索半径都列出来，点一下就能在高德地图里打开核对。</p>
+      </div>
+      <div class="card pad">
+        <h4 style="margin-bottom:6px">定位偏了怎么办？</h4>
+        <p class="small muted">地理编码偶尔会落在小区门口、路口或隔壁街区，几十米的偏差就足以改变「最近点位」是谁。左侧「位置确认」里的绿点可以直接拖到你实际要住的那栋楼（点一下地图也行），再按新位置重算；拖错了点「恢复初始定位」即可。报告会标注这次评估的位置是否微调过。</p>
       </div>
       <div class="card pad">
         <h4 style="margin-bottom:6px">分数低就一定不能住吗？</h4>
