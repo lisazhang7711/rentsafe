@@ -1,7 +1,7 @@
 /**
  * 安居安全评估 · 评分模型
  * 输入：周边 POI 检索结果 + 真实路径规划结果 + 用户补充信息
- * 输出：六维得分、总分、等级、结论、清单、风险项
+ * 输出：五维得分（+ 不计分的生活配套参考）、总分、等级、结论、清单、风险项
  *
  * 距离口径说明：
  *   distance —— 高德周边搜索返回的「直线距离」，仅用于快速排序与粗筛；
@@ -65,27 +65,43 @@
 
   /* 检索半径是分级配置的（消防 6 km、医院 5 km、地铁/公园 3 km、便利店 1.5 km、公交 1 km），
    * 对外统一说「3 公里」是不准确的，文案一律引用这个常量 */
-  var RADIUS_TXT = '分级检索：公交 1 km、便利店与加油站 1.5 km、超市与菜场 2 km、公园与地铁 3 km、医院 5 km、消防 6 km';
+  var RADIUS_TXT = '分级检索：公交 1 km；便利店、药店、加油站、变电站、垃圾站 1.5 km；超市与菜场 2 km；公园、地铁、警务、殡葬 3 km；医院 5 km；消防 6 km';
 
   // 医疗类噪声：口腔、宠物、美容、门诊等不算可用的综合医疗资源
   var MED_NOISE = /口腔|牙科|宠物|美容|整形|视力|眼镜|体检|不孕|男科|中医馆|推拿|按摩|健疗|疗养|旗舰|医美|眼科|诊所/;
 
-  /* ---------------- 维度定义 ---------------- */
+  /* ---------------- 维度定义 ----------------
+   * 【2026-10-11 改版：六维 → 五维】
+   * 原来的「生活保障」维（地铁 / 公交 / 采买，占 16%）被拿掉了。理由（用户拍板）：
+   *   通勤与采买决定的是「住着累不累」，属于**配套设施**，不构成安全条件，
+   *   把它算进「综合安全分」会让分数含义变混——一套地铁口、但消防与医疗都很差的房子，
+   *   不该因为通勤方便而在安全评估里拿高分。
+   * 处理方式不是删掉信息，而是把它降级成一个**不计入总分**的参考区块（见 AMENITY），
+   * 报告里照样给出地铁 / 公交 / 超市菜场 / 便利店 / 加油站的距离，只是不影响分数。
+   * 释放出来的 16% 权重按原比例摊回其余四维，环境维保持 .10 不动
+   * （因为它的内容在同一轮里也一起瘦身了，见下面 ENV 口径调整）。 */
   var DIMS = [
     { id: 'em',    name: '应急医疗', icon: '＋', desc: '最近医院、社区卫生服务中心与药店的覆盖' },
     { id: 'fire',  name: '消防安全', icon: '火', desc: '消防站车程、避难开阔地、楼层高度与疏散条件' },
     { id: 'power', name: '断电韧性', icon: '电', desc: '停电 72 小时内能否就近获得水、食物与药品' },
     { id: 'safe',  name: '治安门禁', icon: '安', desc: '警务资源距离与小区自身门禁、监控、居住形态' },
-    { id: 'life',  name: '生活保障', icon: '居', desc: '通勤与采买等日常运转条件（不含学区与就学）' },
-    { id: 'env',   name: '环境风险', icon: '环', desc: '加油站、变电站、垃圾站、殡葬、内涝等影响' }
+    { id: 'env',   name: '环境风险', icon: '环', desc: '垃圾站异味与内涝等长期影响，加油站 / 变电站按低概率事故计' }
   ];
 
-  /* 六维基准权重（buildWeight 之后归一化，这里不必凑成 1）。
+  /* 生活配套：只展示、不计分（原来的「生活保障」维） */
+  var AMENITY = {
+    name: '生活配套',
+    intro: '通勤、采买与加油决定你住着累不累，属于配套设施而不是安全条件，因此不计入综合安全分——这里只作参考，需要通勤便利的话自己看这一块。'
+  };
+  /* 配套便利度内部构成（仅用于把这个区块排个序，不进总分） */
+  var AMENITY_W = { metro: .38, bus: .22, buy: .30, gas: .10 };
+
+  /* 五维基准权重（buildWeight 之后归一化，这里不必凑成 1）。
    *
    * 【两种口径的这组权重刻意是一样的】这是个被实测推翻过的设计。
    * 原来的 rent/buy 权重不同（租房 safe .20/env .08，买房 safe .14/env .22），
    * 结果在忠实里这种地方实测下来：买房 91.5 反而高于租房 91.2。原因是加权平均的性质——
-   * 六维不可能同时满分，谁把权重压在「当前较弱的维度」上，谁的总分就更低。
+   * 五维不可能同时满分，谁把权重压在「当前较弱的维度」上，谁的总分就更低。
    * 忠实里最弱的两维恰好是治安(82.8)和消防(96.2)，而租房最看重的就是治安，于是租房更低。
    * 「买房口径更严格，分数却更高」是讲不通的。
    *
@@ -98,8 +114,8 @@
    * 买房口径不会比租房更宽松。
    */
   var WEIGHT = {
-    rent: { em: .19, fire: .18, power: .18, safe: .19, life: .16, env: .10 },
-    buy:  { em: .19, fire: .18, power: .18, safe: .19, life: .16, env: .10 }
+    rent: { em: .231, fire: .219, power: .219, safe: .231, env: .100 },
+    buy:  { em: .231, fire: .219, power: .219, safe: .231, env: .100 }
   };
 
   /* 买房对环境嫌恶设施的扣分倍率：同样一间 150 m 外的垃圾站，
@@ -488,61 +504,93 @@
       '居住形态：' + (opt.partition ? '隔断/群租（人员复杂、消防分隔差）' : opt.share ? '合租（人员流动大）' : '整租/自住')
     ];
 
-    /* —— 生活保障 ——
-     * 只保留通勤与采买：学校（小学/中学）已整体下线，本工具不做学区与就学评估。
-     * 权重按原 metro .34 / bus .20 / 采买 .26 的比例归一化到 1（.42 / .24 / .34）。 */
-    var sLife = clamp(
-      distScore(poiBag.metro, [[600, 100], [1200, 88], [2000, 74]], 45) * .42 +
-      distScore(poiBag.bus, [[200, 100], [400, 88], [700, 76]], 52) * .24 +
-      distScore(poiBag.supermarket, [[400, 100], [800, 88], [1500, 76]], 48) * .34, 0, 100);
-    if (opt.elevator === 'none' && h.floor >= 4) sLife -= 6;           // 日常上下楼成本
-    sLife = clamp(sLife, 0, 100);
-    ev.life = [
+    /* —— 生活配套（不计入安全总分）——
+     * 2026-10-11：这一块从评分维度降级为参考区块。学校（小学/中学）此前已整体下线，
+     * 本工具不做学区与就学评估；通勤、采买、加油同理，属配套而非安全。
+     * 内部仍然算一个「便利度」便于在报告里排序展示，但它不参与 baseScore。 */
+    var sAmen = clamp(
+      distScore(poiBag.metro, [[600, 100], [1200, 88], [2000, 74]], 45) * AMENITY_W.metro +
+      distScore(poiBag.bus, [[200, 100], [400, 88], [700, 76]], 52) * AMENITY_W.bus +
+      distScore(poiBag.supermarket, [[400, 100], [800, 88], [1500, 76]], 48) * AMENITY_W.buy +
+      // 加油站：对有车的人是便利，对无车的人基本无感，所以只占配套的一成
+      distScore(poiBag.gas, [[800, 100], [1500, 92], [3000, 82]], 62) * AMENITY_W.gas, 0, 100);
+    if (opt.elevator === 'none' && h.floor >= 4) sAmen -= 6;           // 日常上下楼成本
+    sAmen = clamp(sAmen, 0, 100);
+    var amenEv = [
       '地铁：' + (nearest(poiBag.metro) ? nearest(poiBag.metro).name + '（' + distTxt(nearest(poiBag.metro), R.metro) + '）' : '3 km 内未检索到'),
-      '公交：' + (nearest(poiBag.bus) ? fmtDist(nearest(poiBag.bus).distance) : '未检索到'),
+      '公交：' + (nearest(poiBag.bus) ? nearest(poiBag.bus).name + '（' + fmtDist(nearest(poiBag.bus).distance) + '）' : '1 km 内未检索到'),
       // 采买同时关系日常运转与断电补给，列最近 3 家方便拿去看房时实地核对
       '超市/菜场：' + ((poiBag.supermarket || []).length || (poiBag.market || []).length
         ? (poiBag.supermarket || []).concat(poiBag.market || [])
             .sort(function (a, b) { return a.distance - b.distance; })
             .slice(0, 3).map(function (p) { return p.name + '（' + fmtDist(p.distance) + '）'; }).join(' · ')
-        : '未检索到')
+        : '未检索到'),
+      '便利店：' + (nearest(poiBag.convenience) ? nearest(poiBag.convenience).name + '（' + fmtDist(nearest(poiBag.convenience).distance) + '）' : '1.5 km 内未检索到'),
+      '加油站/加气站：' + (nearest(poiBag.gas) ? nearest(poiBag.gas).name + '（' + fmtDist(nearest(poiBag.gas).distance) + '）' : '1.5 km 内未检索到')
     ];
 
     /* —— 环境风险（扣分制）——
      * ENV_MODE_MUL：同样的嫌恶设施，买房口径扣得更狠。
-     * 注意只对「扣分」生效，不会因为环境干净而给买房额外加分。 */
+     * 注意只对「扣分」生效，不会因为环境干净而给买房额外加分。
+     *
+     * 【2026-10-11 口径重估：加油站与变电站从 12 / 14 分降到 5 分】
+     * 原先把它们当成「会爆炸的邻居」，查证之后站不住：
+     *   加油站：近 20 年国内确有三起波及住宅的事故——2007 上海浦三路加注站检修时
+     *     残气爆炸（4 死 40 伤，"石雨"散落 500 m，居民屋顶被砸穿）、2012 湖南永顺
+     *     加油站泄漏约 1000 升汽油顺下水道进城区（2 死 10 伤、200 多户房屋损坏、
+     *     损失 898 万）、2018 河南濮阳加油站闪爆（周边住宅受损）。
+     *     但三起全部源于施工检修违规操作或泄漏，正常运营的加油站几乎不炸。
+     *     它更常见的影响是车辆进出噪声、油气异味与夜间照明，属长期低烈度干扰。
+     *   变电站：2016 西安南郊 330 kV 主变起火爆炸（8.6 万户停电约 40 分钟，近处门面
+     *     玻璃震碎、路边车被砸被引燃，无伤亡）、2023 深圳龙华城中村变压器故障爆炸
+     *     （200 余户停电，无伤亡）。没有一起造成住宅结构损伤或居民伤亡——
+     *     后果主要是**短时停电**，而停电已经在「断电韧性」那一维里单独评估了；
+     *     长期影响居住的是变压器低频嗡鸣噪声。
+     * 所以保留在环境维里，但按「低概率事故 + 长期噪声异味」计，扣分量级与垃圾站拉开。
+     */
     var envMul = ENV_MODE_MUL[mode] || 1;
     var sEnv = 100, envHits = [];
-    function penalty(list, label, near, mid, maxCut) {
+    /* riskAt：只有贴到这个距离以内才单独出一条风险提示。
+     * 加油站与变电站的阈值压得很低（80 / 50 m），因为它们的风险不是「在附近」，
+     * 而是「正对着」——隔着一条马路和贴着围墙是两回事。 */
+    function penalty(list, label, near, mid, maxCut, riskAt, why) {
       if (!list || !list.length) return;
       var d = list[0].distance;
       var cut = d <= near ? maxCut : d <= mid ? maxCut * .55 : maxCut * .2;
       cut *= envMul;
       sEnv -= cut;
-      envHits.push({ label: label, name: list[0].name, distance: d, cut: Math.round(cut) });
+      envHits.push({
+        label: label, name: list[0].name, distance: d,
+        cut: Math.round(cut), riskAt: riskAt, why: why
+      });
     }
-    penalty(poiBag.gas, '加油站/加气站', 200, 500, 12);
-    penalty(poiBag.substation, '变电站', 150, 400, 14);
-    penalty(poiBag.refuse, '垃圾站/污水处理', 150, 400, 16);
-    penalty(poiBag.funeral, '殡葬设施', 400, 1000, 10);
+    penalty(poiBag.gas, '加油站/加气站', 200, 500, 5, 80,
+      '正常运营的加油站几乎不会爆炸，风险主要来自检修施工违规操作与油品泄漏（近 20 年国内有 3 起波及住宅的案例，最严重的一起造成 200 多户房屋损坏）。日常更常见的是车辆进出噪声、油气异味与夜间照明。');
+    penalty(poiBag.substation, '变电站', 150, 400, 5, 50,
+      '国内变电站起火 / 闪爆案例的常见后果是短时停电与近处玻璃震碎，未见住宅结构损伤或居民伤亡；长期影响居住的是变压器低频嗡鸣噪声，建议夜间实地听一次。');
+    penalty(poiBag.refuse, '垃圾站/污水处理', 150, 400, 16, 150,
+      '异味、蚊蝇与清运车早间噪声是长期且确定的影响，夏季与低楼层尤其明显；距离越近越难靠关窗解决。');
+    penalty(poiBag.funeral, '殡葬设施', 400, 1000, 10, 400,
+      '不构成任何安全威胁，计入环境维是因为它确实影响心理感受与二手房估值——介不介意取决于你自己，看房时建议白天与傍晚各去一次。');
     if (opt.flood) sEnv -= 10 * envMul;         // 曾发生内涝/积水
     if (opt.basement) sEnv -= 4 * envMul;       // 地下空间额外叠加
     if (opt.topfloor && opt.age != null && Number(opt.age) >= 20) sEnv -= 3 * envMul;  // 老房顶层渗漏
     sEnv = clamp(sEnv, 0, 100);
     ev.env = (envHits.length
-      ? envHits.map(function (x) { return x.label + '：' + x.name + '（' + fmtDist(x.distance) + '）'; })
-      : ['1.5 km 内未检索到加油站、变电站、垃圾站、殡葬等嫌恶设施'])
-      .concat(opt.flood ? ['场地历史：该处曾发生内涝或积水（按你填写的信息计入）'] : []);
+      ? envHits.map(function (x) { return x.label + '：' + x.name + '（' + fmtDist(x.distance) + '，−' + x.cut + ' 分）'; })
+      : ['1.5 km 内未检索到垃圾站、加油站、变电站等环境影响因素；3 km 内未检索到殡葬设施'])
+      .concat(opt.flood ? ['场地历史：该处曾发生内涝或积水（按你填写的信息计入，−' + Math.round(10 * envMul) + ' 分）'] : []);
 
-    S = { em: sEm, fire: sFire, power: sPower, safe: sSafe, life: sLife, env: sEnv };
+    S = { em: sEm, fire: sFire, power: sPower, safe: sSafe, env: sEnv };
 
     /* —— 模式专项（租房=租约稳定 / 买房=资产稳健）—— */
     var spec = buildSpec(mode, opt, poiBag);
     var specName = SPEC[mode].name;
 
     /* —— 总分 ——
-     * 六维占 (1-SPEC_W)，模式专项占 SPEC_W。放在加权和里而不是最后加减，
-     * 是为了让专项的影响可以被量化地说出来：「这一块占总分的 15%」。 */
+     * 五维占 (1-SPEC_W)，模式专项占 SPEC_W。放在加权和里而不是最后加减，
+     * 是为了让专项的影响可以被量化地说出来：「这一块占总分的 20%」。
+     * 注意 sAmen（生活配套便利度）不在 S 里，因此完全不影响总分。 */
     var baseScore = 0;
     for (var k in W) baseScore += S[k] * W[k];
     var total = round(clamp(baseScore * (1 - SPEC_W) + spec.score * SPEC_W, 0, 100));
@@ -557,7 +605,7 @@
 
     /* —— 排序找出亮点与短板 ——
      * 显示的权重是「在总分里的实际占比」，所以要乘上 (1-SPEC_W)；
-     * 剩下的 SPEC_W 归模式专项，六维加起来不再是 100%。 */
+     * 剩下的 SPEC_W 归模式专项，五维加起来不再是 100%。 */
     var arr = DIMS.map(function (d) {
       return {
         id: d.id, name: d.name, score: round(S[d.id]),
@@ -598,10 +646,15 @@
     if (opt.basement) risk('dan', '地下空间内涝与排烟', '地下/半地下在暴雨内涝与火灾排烟上风险显著高于地面，需确认排水泵、挡水板与机械排烟。');
     if (opt.age != null && Number(opt.age) >= 30) risk('warn', '房龄偏老', '建成约 ' + opt.age + ' 年，重点关注供电容量、给排水管锈蚀、燃气软管与外墙保温层。');
     if (opt.share) risk('warn', '合租安全边界', '合租需确认门锁是否可反锁、插座与大功率电器使用规则、陌生人进出管理。');
+    /* 环境类风险提示：不再用统一的 150 m 阈值，改用每类自己的 riskAt。
+     * 加油站 80 m、变电站 50 m —— 只有「正对着」才提示，隔着一条马路不提示；
+     * 垃圾站 150 m、殡葬 400 m —— 这两类的影响半径本来就更远。 */
     envHits.forEach(function (x) {
-      if (x.distance <= (x.label === '殡葬设施' ? 400 : 150))
-        risk('warn', '嫌恶设施过近', x.label + '「' + x.name + '」距目标约 ' + fmtDist(x.distance) +
-          '，' + (mode === 'buy' ? '买房口径下按 ' + ENV_MODE_MUL.buy + ' 倍计扣分——它会长期挂在估值上。' : '可能影响居住体验。'));
+      if (x.riskAt && x.distance <= x.riskAt) {
+        risk('warn', '环境因素过近：' + x.label,
+          '「' + x.name + '」距目标约 ' + fmtDist(x.distance) + '。' + x.why +
+          (mode === 'buy' ? '买房口径下这一类按 ' + ENV_MODE_MUL.buy + ' 倍计扣分——它会长期挂在估值上。' : ''));
+      }
     });
 
     /* —— 模式专项带来的风险项（这是两种口径最主要的内容差异）—— */
@@ -639,7 +692,7 @@
     if (opt.partition) note('隔断/群租：消防 −5、治安 −4');
     if (opt.share) note('合租：治安门禁 −6');
     if (opt.camera === 'no') note('无监控：治安门禁按低分计入');
-    if (opt.elevator === 'none' && h.floor >= 7) note('无电梯且住在 ' + h.floor + ' 层：断电韧性 −9、生活保障 −6');
+    if (opt.elevator === 'none' && h.floor >= 7) note('无电梯且住在 ' + h.floor + ' 层：断电韧性 −9、生活配套便利度 −6（配套不计入安全分）');
     if (opt.elevator === 'flaky' && h.floor >= 7) note('电梯常故障且住在 ' + h.floor + ' 层：断电韧性 −5');
     if (opt.device) note('需电医疗设备：断电韧性 −8，医疗与断电权重同时上调');
     if (opt.elderly || opt.toddler) note('家中有老人/幼儿：医疗权重上调，断电韧性 −3');
@@ -654,6 +707,8 @@
     note('本次口径为「' + (mode === 'rent' ? '租房' : '购房') + '」：' + specName + '这一块占总分 ' +
       Math.round(SPEC_W * 100) + '%，是另一口径没有的评估项。');
     if (mode === 'buy') note('购房口径：环境嫌恶设施按 ' + ENV_MODE_MUL.buy + ' 倍计扣分（对租客是阶段性损失，对业主是永久估值折损）');
+    note('生活配套（地铁 / 公交 / 采买 / 加油）只作参考，不计入综合安全分：通勤与采买决定住着累不累，属配套设施而非安全条件。');
+    note('环境风险按影响确定性分档扣分：垃圾站 16 分（异味、蚊蝇、清运车噪声，长期且确定）；内涝 10 分；加油站与变电站各 5 分（按低概率事故 + 长期噪声计，不按「会爆炸」计——近 20 年国内加油站事故全部源于施工检修违规或泄漏，变电站事故后果主要是短时停电，未见住宅结构损伤或居民伤亡）。');
 
     /* —— 清单 —— */
     var p72 = buildPower72(poiBag, opt, R, h);
@@ -677,6 +732,11 @@
         weight: Math.round(SPEC_W * 100)
       },
       baseScore: round(baseScore),
+      /* 生活配套：参考区块，不参与加权，因此没有 weight 字段 */
+      amenity: {
+        name: AMENITY.name, intro: AMENITY.intro,
+        score: round(sAmen), evidences: amenEv
+      },
       facts: {
         med: withRoute(nm, R.med),
         fire: withRoute(nf, R.fire),
@@ -686,7 +746,8 @@
         convenience: withRoute(nearest(poiBag.convenience), R.convenience),
         metro: withRoute(nearest(poiBag.metro), R.metro),
         police: withRoute(nearest(poiBag.police), R.police),
-        pharmacy: withRoute(nearest(poiBag.pharmacy), R.pharmacy)
+        pharmacy: withRoute(nearest(poiBag.pharmacy), R.pharmacy),
+        gas: withRoute(nearest(poiBag.gas), R.gas)
       },
       poiBag: poiBag
     };
