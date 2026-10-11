@@ -26,7 +26,7 @@
     );
   }
 
-  /* 六维雷达图
+  /* 五维雷达图
    * 画布比图形大一圈（viewBox 带负偏移），否则左右四个角的标签会被 overflow 裁掉。
    * 侧边角标签排两行（名字一行、分数一行），横向只占 4 个字的宽度，
    * 这样图形本体 R 仍可保持在 110，不必为了塞标签把雷达缩得很小。 */
@@ -109,7 +109,8 @@
   /* 各类别实际使用的检索半径（与 model.QUERIES 保持一致，写在报告里便于核查） */
   var SRC_RADIUS = {
     med: '5 km', fire: '6 km', pharmacy: '1.5 km', supermarket: '2 km', market: '2 km',
-    convenience: '1.5 km', shelter: '3 km', police: '3 km', metro: '3 km'
+    convenience: '1.5 km', shelter: '3 km', police: '3 km', metro: '3 km', gas: '1.5 km',
+    refuse: '1.5 km', substation: '1.5 km', funeral: '3 km'
   };
 
   /* 数据来源与核查：把每个结论对应的原始 POI 摊开，能一条条点进去核对 */
@@ -119,8 +120,17 @@
       ['综合医院', f.med, 'med'], ['消防救援站', f.fire, 'fire'], ['药店', f.pharmacy, 'pharmacy'],
       ['超市 / 商场', f.supermarket, 'supermarket'], ['菜市场 / 生鲜', f.market, 'market'],
       ['便利店', f.convenience, 'convenience'], ['应急疏散开阔地', f.shelter, 'shelter'],
-      ['警务资源', f.police, 'police'], ['地铁站', f.metro, 'metro']
+      ['警务资源', f.police, 'police'], ['地铁站', f.metro, 'metro'],
+      ['加油站 / 加气站', f.gas, 'gas']
     ];
+    /* 环境影响因素：只在真检索到时才列出来——空行一堆「未检索到」既占版面又让人误以为有风险。
+     * 这一组是 2026-10-11 补上的：环境维改了口径（加油站 / 变电站降权），
+     * 就更要把原始点位摊开，让人能自己判断扣得对不对。 */
+    [['垃圾站 / 中转站', 'refuse'], ['变电站', 'substation'], ['殡葬设施', 'funeral']]
+      .forEach(function (it) {
+        var p = (res.poiBag[it[1]] || [])[0];
+        if (p) items.push([it[0], p, it[1]]);
+      });
     var rows = items.map(function (it) {
       var p = it[1];
       var coord = p && p.lng != null ? p.lng.toFixed(6) + ', ' + p.lat.toFixed(6) : '—';
@@ -184,7 +194,8 @@
       { k: '便利店', v: f.convenience && f.convenience.name, d: f.convenience && f.convenience.distance, r: f.convenience && f.convenience.route, p: f.convenience },
       { k: '应急疏散开阔地', v: f.shelter && f.shelter.name, d: f.shelter && f.shelter.distance, r: f.shelter && f.shelter.route, p: f.shelter },
       { k: '警务资源', v: f.police && f.police.name, d: f.police && f.police.distance, r: f.police && f.police.route, p: f.police },
-      { k: '地铁站', v: f.metro && f.metro.name, d: f.metro && f.metro.distance, r: f.metro && f.metro.route, p: f.metro }
+      { k: '地铁站', v: f.metro && f.metro.name, d: f.metro && f.metro.distance, r: f.metro && f.metro.route, p: f.metro },
+      { k: '加油站 / 加气站', v: f.gas && f.gas.name, d: f.gas && f.gas.distance, r: f.gas && f.gas.route, p: f.gas }
     ];
     var hasRoute = rows.some(function (r) { return r.r && r.r.d; });
 
@@ -223,6 +234,27 @@
         '</section>'
       : '';
 
+    /* 生活配套：通勤 / 采买 / 加油。属配套设施而非安全条件，
+     * 2026-10-11 从评分维度降级为参考区块——分数照给，但不参与加权。 */
+    var amenityHtml = res.amenity
+      ? '<section class="card pad" style="margin-bottom:16px">' +
+          '<div class="sec-t">生活配套' +
+            '<span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500;font-size:12px">　参考项，不计入综合安全分</span>' +
+          '</div>' +
+          '<div style="display:flex;align-items:center;gap:12px;margin:2px 0 10px">' +
+            '<div style="font-size:26px;font-weight:800;line-height:1;color:' + M.scoreColor(res.amenity.score) + '">' +
+              res.amenity.score + '</div>' +
+            '<div class="bar" style="flex:1;margin:0"><i style="width:' + res.amenity.score +
+              '%;background:' + M.scoreColor(res.amenity.score) + '"></i></div>' +
+            '<div class="small muted" style="white-space:nowrap">便利度参考</div>' +
+          '</div>' +
+          '<p class="hint small muted" style="margin:0 0 10px">' + esc(res.amenity.intro) + '</p>' +
+          '<ul class="ev" style="margin:0">' +
+            res.amenity.evidences.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') +
+          '</ul>' +
+        '</section>'
+      : '';
+
     var d = new Date();
     var stamp = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 
@@ -254,12 +286,15 @@
 
       /* 雷达 + 维度 */
       '<section class="card pad" style="margin-bottom:16px">' +
-        '<div class="sec-t">六维安全结构</div>' +
+        '<div class="sec-t">五维安全结构</div>' +
         '<div class="grid2 radar-row">' +
           '<div>' + radar(res.dims) + '</div>' +
           '<div class="dims dims-2">' + dimHtml + '</div>' +
         '</div>' +
       '</section>' +
+
+      /* 生活配套：参考项，明确不计入综合安全分 */
+      amenityHtml +
 
       /* 关键点位 */
       '<section class="card pad" style="margin-bottom:16px">' +
@@ -328,7 +363,7 @@
     L.push('地址：' + place.addr + '　口径：' + (res.mode === 'rent' ? '租房' : '购房'));
     L.push('综合得分：' + res.score + ' / 100（' + res.grade + ' 级）— ' + res.gradeTxt);
     L.push('');
-    L.push('— 六维得分 —');
+    L.push('— 五维得分 —');
     res.dims.forEach(function (d) { L.push(d.name + '：' + d.score + '（占总分 ' + d.weight + '%）'); });
     if (res.spec) {
       L.push(res.spec.name + '：' + res.spec.score + '（' + (res.mode === 'rent' ? '租房' : '购房') + '专项，占总分 ' + res.spec.weight + '%）');
@@ -336,11 +371,18 @@
         L.push('　· ' + x.t + (x.cut ? ' −' + x.cut + ' 分' : '') + '：' + x.s);
       });
     }
+    if (res.amenity) {
+      L.push('');
+      L.push('— 生活配套（参考项，不计入综合安全分）—');
+      L.push('便利度：' + res.amenity.score + ' / 100');
+      res.amenity.evidences.forEach(function (e) { L.push('· ' + e); });
+    }
     L.push('');
     L.push('— 最近关键点位 —');
     [['综合医院', res.facts.med], ['消防救援站', res.facts.fire], ['药店', res.facts.pharmacy],
      ['超市', res.facts.supermarket], ['菜市场', res.facts.market], ['便利店', res.facts.convenience],
-     ['应急疏散开阔地', res.facts.shelter], ['警务资源', res.facts.police], ['地铁站', res.facts.metro]
+     ['应急疏散开阔地', res.facts.shelter], ['警务资源', res.facts.police], ['地铁站', res.facts.metro],
+     ['加油站 / 加气站', res.facts.gas]
     ].forEach(function (x) {
       var p = x[1];
       if (!p) return L.push('· ' + x[0] + '：未检索到');
@@ -368,10 +410,16 @@
       (place.adjusted ? '（已手动微调）' : '（未微调）'));
     [['综合医院', res.facts.med], ['消防救援站', res.facts.fire], ['药店', res.facts.pharmacy],
      ['超市', res.facts.supermarket], ['菜市场', res.facts.market], ['便利店', res.facts.convenience],
-     ['应急疏散开阔地', res.facts.shelter], ['警务资源', res.facts.police], ['地铁站', res.facts.metro]
+     ['应急疏散开阔地', res.facts.shelter], ['警务资源', res.facts.police], ['地铁站', res.facts.metro],
+     // 第三位为「搜不到时是否仍要列出」：核心点位要列（说明确实没有），
+     // 环境因素不列（搜不到就是没有影响，列一堆「未检索到」反而像在暗示风险）
+     ['加油站 / 加气站', res.facts.gas, 1],
+     ['垃圾站 / 中转站', (res.poiBag.refuse || [])[0], 0],
+     ['变电站', (res.poiBag.substation || [])[0], 0],
+     ['殡葬设施', (res.poiBag.funeral || [])[0], 0]
     ].forEach(function (x) {
       var p = x[1];
-      if (!p) return L.push('· ' + x[0] + '：未检索到');
+      if (!p) { if (x[2] !== 0) L.push('· ' + x[0] + '：未检索到'); return; }
       L.push('· ' + x[0] + '：' + p.name + '｜' + (p.address || '地址未返回') + '｜' +
         p.lng.toFixed(6) + ',' + p.lat.toFixed(6) + '｜直线 ' + fmt(p.distance));
     });
