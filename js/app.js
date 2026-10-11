@@ -463,9 +463,12 @@
     var head = '<tr><th>维度</th>' + arr.map(function (c) {
       return '<th>' + esc(c.title.length > 10 ? c.title.slice(0, 10) + '…' : c.title) + '</th>';
     }).join('') + '</tr>';
-    var body = names.map(function (n, di) {
+    /* 按名字取分，不按下标：维度数量变过（六维→五维），老候选仍然是六维数组，
+     * 用下标会把「生活保障」的分读到「环境风险」那一行去。 */
+    var body = names.map(function (n) {
       return '<tr><td>' + n + '</td>' + arr.map(function (c) {
-        var v = c.dims[di] ? c.dims[di].score : '—';
+        var d = (c.dims || []).filter(function (x) { return x.name === n; })[0];
+        var v = d ? d.score : '—';
         return '<td class="v" style="color:' + (typeof v === 'number' ? M.scoreColor(v) : '#8b95a3') + '">' + v + '</td>';
       }).join('') + '</tr>';
     }).join('');
