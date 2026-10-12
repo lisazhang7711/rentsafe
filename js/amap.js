@@ -110,6 +110,93 @@
     });
   }
 
+  /**
+   * 坐标系转换：WGS-84（浏览器原生 GPS）-> GCJ-02（高德）。
+   * 这是「开了定位反而更不准」的头号原因：浏览器给的是真 GPS 坐标，
+   * 国内地图上必须换成 GCJ-02，否则北京实测整体偏移约 550 m（各地 100–700 m 不等）。
+   * from: 'gps' | 'baidu' | 'mapbar'
+   */
+  function toGCJ02(lng, lat, from) {
+    return load().then(function (AMap) {
+      return new Promise(function (resolve, reject) {
+        AMap.convertFrom([lng, lat], from || 'gps', function (status, result) {
+          if (status === 'complete' && result && result.info === 'ok' &&
+              result.locations && result.locations.length) {
+            resolve({ lng: result.locations[0].lng, lat: result.locations[0].lat });
+          } else reject(new Error('坐标转换失败'));
+        });
+      });
+    });
+  }
+
+  /** 高德 Geolocation 插件定位（内部已按高德坐标系处理，并返回 location_type 说明来源） */
+  function locateByPlugin(AMap) {
+    return new Promise(function (resolve, reject) {
+      var done = false;
+      var timer = setTimeout(function () {
+        if (!done) { done = true; reject(new Error('定位超时')); }
+      }, 12000);
+      var gl;
+      try {
+        gl = new AMap.Geolocation({
+          enableHighAccuracy: true,  // 请求 GPS 级精度，手机端必须开
+          timeout: 10000,
+          maximumAge: 0,             // 不复用几分钟前的旧位置
+          convert: true,             // 坐标纠偏到高德系
+          needAddress: true,
+          extensions: 'all'
+        });
+      } catch (e) { clearTimeout(timer); return reject(e); }
+      gl.getCurrentPosition(function (status, result) {
+        if (done) return; done = true; clearTimeout(timer);
+        if (status === 'complete' && result && result.position) {
+          var c = result.addressComponent || {};
+          resolve({
+            lng: result.position.lng, lat: result.position.lat,
+            name: result.formattedAddress || '',
+            province: c.province || '', city: c.city || c.province || '',
+            district: c.district || '', township: c.township || '',
+            accuracy: result.accuracy != null ? result.accuracy : null,
+            source: result.location_type || 'amap'   // html5=浏览器定位 / ip=IP 兜底（公里级）
+          });
+        } else {
+          reject(new Error((result && result.message) || '高德定位失败'));
+        }
+      });
+    });
+  }
+
+  /** 降级路径：浏览器原生定位 -> 手动转 GCJ-02 -> 逆地理编码拿地址 */
+  function locateByNative() {
+    return new Promise(function (resolve, reject) {
+      if (!navigator.geolocation) return reject(new Error('浏览器不支持定位'));
+      navigator.geolocation.getCurrentPosition(function (pos) {
+        var acc = pos.coords.accuracy;
+        // 浏览器返回 WGS-84，不转换直接用到高德上会整体偏移几百米
+        toGCJ02(pos.coords.longitude, pos.coords.latitude, 'gps').then(function (p) {
+          regeocode(p.lng, p.lat).then(function (r) {
+            resolve({
+              lng: p.lng, lat: p.lat, name: r.name, province: r.province, city: r.city,
+              district: r.district, township: r.township,
+              accuracy: acc, source: 'html5-converted'
+            });
+          }).catch(function () {
+            resolve({ lng: p.lng, lat: p.lat, name: '', accuracy: acc, source: 'html5-converted' });
+          });
+        }).catch(function () { reject(new Error('坐标转换失败')); });
+      }, function (e) {
+        reject(new Error(e && e.code === 1 ? '定位权限被拒绝' : '定位失败'));
+      }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
+    });
+  }
+
+  /** 浏览器定位：高德插件优先，失败降级原生 + 纠偏。返回 GCJ-02 坐标 */
+  function locate() {
+    return load().then(function (AMap) {
+      return locateByPlugin(AMap).catch(function () { return locateByNative(); });
+    });
+  }
+
   /* 高德 PlaceSearch 单页上限是 50 条；城区里便利店/超市一公里内能上百家，
    * 旧的 pageSize:30 只读第一页 = 系统性丢数据（实测忠实里西区便利店共 64 家，只读回 30 家）。 */
   var MAX_PAGE_SIZE = 50;
@@ -329,6 +416,7 @@
   RS.geo = {
     load: load, suggest: suggest, geocode: geocode,
     regeocode: regeocode, nearBatch: nearBatch, search: search,
-    routeBatch: routeBatch, initMap: initMap
+    routeBatch: routeBatch, initMap: initMap,
+    toGCJ02: toGCJ02, locate: locate
   };
 })();
