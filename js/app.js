@@ -120,7 +120,11 @@
     var p = state.place;
     $('placeCard').classList.remove('hidden');
     $('placeName').textContent = p.title;
-    $('placeAddr').textContent = p.addr;
+    // 把定位精度摆到明面上：偏差多大用户得看得见，才知道要不要拖点校正
+    var accTxt = '';
+    if (p.locateSource === 'ip') accTxt = '　·　IP 粗定位（仅供参考，误差可达数公里）';
+    else if (p.accuracy != null) accTxt = '　·　定位精度 ±' + Math.round(p.accuracy) + ' 米';
+    $('placeAddr').textContent = p.addr + accTxt;
     $('btnRun').disabled = false;
     // 换地址（而不是拖动微调）时，重置初始定位基准
     if (!state.originPlace || state.originPlace.title !== p.title) {
@@ -207,21 +211,32 @@
     state.map.add(mk); state.markers.push(mk);
   }
 
-  /* ---------------- 浏览器定位 ---------------- */
+  /* ---------------- 浏览器定位 ----------------
+   * 旧写法直接用 navigator.geolocation 的返回值：那是 WGS-84（真 GPS），
+   * 高德地图要的是 GCJ-02，两者差几百米（北京实测约 550 m），所以「开了定位反而更不准」。
+   * 现在统一走 RS.geo.locate()：高德插件优先（自带纠偏），失败降级原生并做坐标转换。 */
   function locateMe() {
-    if (!navigator.geolocation) return toast('当前浏览器不支持定位');
-    toast('正在获取位置…');
-    navigator.geolocation.getCurrentPosition(function (pos) {
-      var lng = pos.coords.longitude, lat = pos.coords.latitude;
-      G.regeocode(lng, lat).then(function (r) {
-        state.place = { title: r.name || '当前位置', addr: r.name, lng: lng, lat: lat };
-        $('addrInput').value = r.name || '';
-        afterLocate();
-      }).catch(function () {
-        state.place = { title: '当前位置', addr: lng.toFixed(5) + ',' + lat.toFixed(5), lng: lng, lat: lat };
-        afterLocate();
-      });
-    }, function () { toast('定位被拒绝，请手动输入地址'); }, { timeout: 8000 });
+    if (!navigator.geolocation) return toast('当前浏览器不支持定位（也需 HTTPS 页面）');
+    toast('正在获取高精度位置…');
+    RS.geo.locate().then(function (r) {
+      state.place = {
+        title: r.name || '当前位置',
+        addr: r.name || (r.lng.toFixed(5) + ',' + r.lat.toFixed(5)),
+        lng: r.lng, lat: r.lat,
+        accuracy: r.accuracy, locateSource: r.source
+      };
+      $('addrInput').value = r.name || '';
+      afterLocate();
+      if (r.source === 'ip') {
+        toast('只拿到 IP 粗定位（城市级，误差可达数公里）——桌面浏览器在国内通常如此。建议直接输入小区名，或用手机打开。');
+      } else if (r.accuracy != null && r.accuracy > 200) {
+        toast('定位精度约 ±' + Math.round(r.accuracy) + ' 米，偏差偏大：请拖动绿点到实际楼栋后再评估。');
+      } else if (r.accuracy != null) {
+        toast('定位成功，精度约 ±' + Math.round(r.accuracy) + ' 米');
+      }
+    }).catch(function (e) {
+      toast('定位失败：' + ((e && e.message) || '请检查定位权限') + '。桌面浏览器在国内常拿不到准确定位，建议直接输入小区名。');
+    });
   }
 
   /* ---------------- 主流程 ---------------- */
