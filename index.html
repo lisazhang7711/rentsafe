@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>安居综合评估 · 租房买房前，先做一次居住条件体检</title>
 <meta name="description" content="输入小区名，约 20 秒生成一份居住条件评估：安全分（应急医疗/消防/断电/治安/环境）+ 按用途加权的综合适配分（安全/通勤/采买），你在意的每一项单独打分，附断电 72 小时清单与看房确认清单。">
-<link rel="stylesheet" href="css/style.css?v=11">
+<link rel="stylesheet" href="css/style.css?v=12">
 </head>
 <body>
 
@@ -92,6 +92,32 @@
       <div class="card pad">
         <h4 style="margin-bottom:8px">第二层 · 综合适配分（0–100）</h4>
         <p class="small muted">先问你这套房怎么用，五种用途各有一套基准权重；再勾「最在意」的几项，每勾一项都在基准上加减。报告里有三样东西：<b>权重堆叠条</b>（一眼看出重哪一块）、<b>权重推演表</b>（基准 → 每项加减 → 归一化）、<b>你在意的每一项的独立评分</b>（附依据）；还会列出同一套房换成别的用途分别是多少分。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 等级按相对位置 ============ -->
+  <section class="section">
+    <h2>A / B / C / D 看的是排位，不是分数线</h2>
+    <p class="sub">分数会随口径变——把直线距离换成步行路网距离之后，同一个地址普遍降 5–8 分。要是等级还按固定分数线划（老版本是 85 / 70 / 55），整体就会一起掉一档，同一套房上周 A、这周 B，纯粹是口径改动的假信号。</p>
+    <div class="grid2">
+      <div class="card pad">
+        <h4 style="margin-bottom:8px">等级 = 在参考基准里的位置</h4>
+        <table class="cmp-tb">
+          <thead><tr><th>等级</th><th>相对位置</th><th class="d">对应分数</th></tr></thead>
+          <tbody>
+            <tr><td><span class="grade A">A</span></td><td>优于 85% 以上</td><td class="v">≥ 79.0</td></tr>
+            <tr><td><span class="grade B">B</span></td><td>优于 55%–85%</td><td class="v">64.5–79.0</td></tr>
+            <tr><td><span class="grade C">C</span></td><td>优于 20%–55%</td><td class="v">50.0–64.5</td></tr>
+            <tr><td><span class="grade D">D</span></td><td>优于不到 20%</td><td class="v">&lt; 50.0</td></tr>
+          </tbody>
+        </table>
+        <p class="small muted" style="margin-top:10px">报告里同时写出两个数：「82.4 分」是绝对分数，「优于 88% 的房源」是相对位置。以后调评分口径，分数会变，等级不会跟着乱跳。</p>
+      </div>
+      <div class="card pad">
+        <h4 style="margin-bottom:8px">基准是什么，为什么不是实测分位</h4>
+        <p class="small muted">参考基准是按城市住宅常见条件设定的估计分布（79 分约等于「地铁 1 km 内 + 医院 2.5 km 内 + 消防站在 4 km 内」这种水平），<b>不是</b>全市房源的抽样统计——手上没有那份数据，就不假装有。它是一条公开在代码里的曲线（<code>REF_PTS</code>），改几个锚点就能整体挪动档位线；报告页脚也写着这条换算，随时可以核对。</p>
+        <p class="small muted" style="margin-top:8px">单项的「满足 / 基本满足 / 勉强 / 不满足」也用同一条阶梯，所以不会出现「（基本满足）：通勤偏累」这种前后矛盾的说法。</p>
       </div>
     </div>
   </section>
