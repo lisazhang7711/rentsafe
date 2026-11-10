@@ -176,7 +176,7 @@
    * 避免「怕吵 + 家有老人」把通勤压到 0 之后报告里连一行都不剩。 */
   var FIT = {
     name: '综合适配',
-    intro: '安全分回答「出事时靠不靠得住」，这一层回答「按你的用途合不合适」：安全、通勤、采买三块按用途重新加权，你在意的每一项再单独打分（下面逐条给依据）。安全分本身不随用途变化，方便几套房子横向比。通勤用最近地铁与公交的距离代理，没有取到你公司的真实路线。',
+    intro: '安全分回答「出事时靠不靠得住」，这一层回答「按你的用途合不合适」：安全、通勤、采买三块按用途重新加权，再扣「用途门槛」——每个用途各有几条硬条件（养老看医院距离、通勤看地铁距离、投资看流动性），不达标就扣分并写明是哪一条；你在意的每一项还会单独打分。安全分本身不随用途变化，方便几套房子横向比。通勤用最近地铁与公交的距离代理，没有取到你公司的真实路线。',
     BASE: {
       commute: { name: '上班通勤自住', safe: .40, go: .45, buy: .15, note: '早出晚归，地铁与公交通勤的时间成本最先被感知。' },
       family:  { name: '家庭常住',     safe: .60, go: .20, buy: .20, note: '家里有老人小孩，应急医疗与消防的权重要压过通勤。' },
@@ -206,6 +206,17 @@
     resale:       { name: '看重转手 / 保值' }
   };
   function levelOf(v) { return v >= 85 ? '满足' : v >= 70 ? '基本满足' : v >= 55 ? '勉强' : '不满足'; }
+
+  /* 等级文案。提到模块作用域是因为现在有两个分数都要用：
+   * 安全分（evaluate 里）和综合适配分（buildFit 里）。
+   * 头部分数改成适配分之后，徽章与这句话必须跟着适配分走，不能各说各的。 */
+  var GRADE_TXT = {
+    A: '整体条件优秀，可以进入砍价/签约环节',
+    B: '主体条件可接受，按清单补齐几项即可',
+    C: '存在明确短板，务必实地核实后再决定',
+    D: '关键保障缺失较多，除非价格极低否则不建议'
+  };
+  function gradeOf(v) { return v >= 85 ? 'A' : v >= 70 ? 'B' : v >= 55 ? 'C' : 'D'; }
 
   /** 用途 + 需求 -> 最终三块权重（已归一化到 100）与推演过程 */
   function fitWeights(purpose, needs) {
@@ -252,9 +263,61 @@
   }
 
   /** 只算分、不生成文案：给「换成别的用途会怎样」用 */
-  function fitScoreOf(purpose, needs, safe, go, buy) {
+  function fitScoreOf(purpose, needs, safe, go, buy, ctx) {
     var f = fitWeights(purpose, needs);
-    return round(clamp(f.w.safe * safe / 100 + f.w.go * go / 100 + f.w.buy * buy / 100, 0, 100));
+    var raw = f.w.safe * safe / 100 + f.w.go * go / 100 + f.w.buy * buy / 100;
+    return round(clamp(raw - gateSum(purpose, ctx), 0, 100));
+  }
+
+  /* ---------------- 用途门槛 ----------------
+   * 【为什么光有权重不够（2026-11-10 实测）】
+   * 加权平均压不出真正的差别：三块都在 85 分以上时，任何权重组合的结果都落在同一小段里。
+   * 实测同一套房五个用途只差 0.2 分（87.3 / 87.1 / …），用户看到的感受就是「换了没反应」。
+   * 但现实里换用途是有硬条件的：养老的人不能接受医院在 3 km 外，通勤族不能接受地铁在 2 km 外。
+   * 所以每个用途配一组门槛，达不到就扣分，并且把「哪一条没过」写进报告——
+   * 换用途改的就不只是一个百分数，还有理由。
+   * 门槛封顶 12 分，权重仍然是主导；超了就按比例缩，不改变各条的相对严重程度。 */
+  var GATE_CAP = 12;
+  function buildGates(purpose, c) {
+    var out = [], d = c || {};
+    function gate(cut, t, why, hit) { if (hit) out.push({ cut: cut, t: t, why: why }); }
+    var none = function (v) { return v == null; };
+
+    if (purpose === 'commute') {
+      gate(8, '地铁超过 1.5 km',
+        '通勤主要靠地铁，1.5 km 之外的接驳时间常常比坐车本身还长', none(d.metro) || d.metro > 1500);
+      gate(4, '公交站超过 800 m',
+        '连公交都不在步行舒适范围，雨天和加班晚了最明显', none(d.bus) || d.bus > 800);
+    } else if (purpose === 'family') {
+      gate(7, '医院超过 2.5 km',
+        '小孩发烧、老人急症这类事上，2.5 km 之外每趟都得打车', none(d.med) || d.med > 2500);
+      gate(5, '消防站超过 4 km',
+        '有小孩的家庭对火灾更敏感，救援半径偏大', none(d.fire) || d.fire > 4000);
+    } else if (purpose === 'invest') {
+      gate(9, '地铁超过 2 km',
+        '转手时买家第一句就问离地铁多远，2 km 之外议价空间明显变大', none(d.metro) || d.metro > 2000);
+      gate(6, '环境分低于 70',
+        '嫌恶设施会长期压在估值上，买家看房时一定会问', d.env != null && d.env < 70);
+    } else if (purpose === 'retire') {
+      gate(9, '医院超过 2 km',
+        '养老用途就医频次高，2 km 之内才算「随时能去」', none(d.med) || d.med > 2000);
+      gate(5, '环境分低于 75',
+        '噪声与异味对老人的睡眠和情绪影响更大', d.env != null && d.env < 75);
+    } else if (purpose === 'solo') {
+      gate(6, '采买分低于 70',
+        '一个人住多半没车，米面油全靠步行拎回来', d.buyScore != null && d.buyScore < 70);
+      gate(4, '便利店超过 500 m',
+        '夜间临时补给要能走着去', none(d.cv) || d.cv > 500);
+    }
+    var sum = 0;
+    out.forEach(function (x) { sum += x.cut; });
+    if (sum > GATE_CAP) {
+      out.forEach(function (x) { x.cut = round(x.cut * GATE_CAP / sum); });
+    }
+    return out;
+  }
+  function gateSum(purpose, c) {
+    return buildGates(purpose, c).reduce(function (s, x) { return s + x.cut; }, 0);
   }
 
   /* ---------------- 最在意项：逐条打分 ----------------
@@ -380,11 +443,14 @@
     return out;
   }
 
-  /** 三块分数 -> 按用途与需求加权；返回适配分、权重推演、在意项评分与其它用途对照 */
-  function buildFit(safeScore, goScore, buyScore, opt, concerns) {
+  /** 三块分数 -> 按用途与需求加权，再扣用途门槛；返回适配分、权重推演、门槛、在意项评分与其它用途对照 */
+  function buildFit(safeScore, goScore, buyScore, opt, concerns, ctx) {
     var f = fitWeights(opt.purpose, opt.needs);
     var base = f.base, w = f.w;
-    var score = round(clamp(w.safe * safeScore / 100 + w.go * goScore / 100 + w.buy * buyScore / 100, 0, 100));
+    var raw = clamp(w.safe * safeScore / 100 + w.go * goScore / 100 + w.buy * buyScore / 100, 0, 100);
+    var gates = buildGates(f.key, ctx);
+    var gateCut = Math.min(GATE_CAP, gates.reduce(function (s, x) { return s + x.cut; }, 0));
+    var score = round(clamp(raw - gateCut, 0, 100));
     var blocks = [
       { id: 'safe', name: '安全（五维 + 专项）', score: round(safeScore), weight: w.safe },
       { id: 'go',   name: '通勤（地铁 / 公交）',  score: round(goScore),   weight: w.go },
@@ -399,9 +465,15 @@
     else if (score >= 55) verdict = '按「' + base.name + '」看有明显不匹配的地方，' + weakest.name + '只有 ' + weakest.score + ' 分。';
     else verdict = '按「' + base.name + '」看不太对得上，' + weakest.name + '拖得很明显，除非价格有优势否则不必花时间。';
 
+    /* 门槛没过是最硬的理由，必须排在结论句前面说清楚 */
+    if (gates.length) {
+      verdict += ' 硬门槛有一条没过：' + gates[0].t + '（−' + gates[0].cut + ' 分），' +
+        '按这个用途看这比其它短板更关键。';
+    }
+
     /* 适配分与安全分差得远的时候必须点出来，否则用户容易把「配套好」误读成「房子安全」 */
-    if (delta >= 6) verdict += ' 注意：适配分比安全分高 ' + delta + ' 分，高出的部分来自通勤与采买，安全条件没有变好。';
-    else if (delta <= -6) verdict += ' 注意：适配分比安全分低 ' + (-delta) + ' 分，配套拖累了整体，安全条件本身没有那么差。';
+    if (!gates.length && delta >= 6) verdict += ' 注意：适配分比安全分高 ' + delta + ' 分，高出的部分来自通勤与采买，安全条件没有变好。';
+    else if (!gates.length && delta <= -6) verdict += ' 注意：适配分比安全分低 ' + (-delta) + ' 分，配套拖累了整体，安全条件本身没有那么差。';
 
     /* 你在意的那几项必须进结论句——否则勾选框看起来像没生效 */
     var worst = null;
@@ -413,21 +485,26 @@
 
     /* 同一套房换用途会变成多少——这是「用途到底有没有起作用」最直白的证据 */
     var alts = Object.keys(FIT.BASE).map(function (k) {
-      return { key: k, name: FIT.BASE[k].name, score: fitScoreOf(k, opt.needs, safeScore, goScore, buyScore) };
+      return { key: k, name: FIT.BASE[k].name, score: fitScoreOf(k, opt.needs, safeScore, goScore, buyScore, ctx) };
     });
     /* 三块分数的离散程度：分数越接近，换用途对总分的影响就越小。
      * 这不是模型不灵敏，是加权平均的数学性质——报告里要主动说清，
      * 否则用户会以为「换用途没反应」是 bug。 */
     var bmin = Math.min(round(safeScore), round(goScore), round(buyScore));
     var bmax = Math.max(round(safeScore), round(goScore), round(buyScore));
+    /* 五个用途里这套房最合适哪一个：用来回答「我换个用途分数会不会不一样」。
+     * 差距不到 0.3 分就不必说，否则报告里会出现「低 0.1 分」这种噪声。 */
+    var best = alts.slice().sort(function (a, b) { return b.score - a.score; })[0];
 
     return {
       purpose: f.key, purposeName: base.name, purposeNote: base.note,
       needs: f.used.map(function (n) { return FIT.NEEDS[n].name; }),
       weights: w, score: score,
-      grade: score >= 85 ? 'A' : score >= 70 ? 'B' : score >= 55 ? 'C' : 'D',
+      grade: gradeOf(score), gradeTxt: GRADE_TXT[gradeOf(score)],
       delta: delta, verdict: verdict, weakest: weakest.name, blocks: blocks,
       trace: f.rows, floored: f.floored, alts: alts, concerns: concerns || [],
+      raw: round(raw), gates: gates, gateCut: round(gateCut),
+      best: best, gapToBest: round(best.score - score),
       spread: round(bmax - bmin)
     };
   }
@@ -921,15 +998,19 @@
       sEm: sEm, sFire: sFire, sEnv: sEnv, sGo: sGo, sBuy: sBuy,
       envHits: envHits, spec: spec
     });
-    var fit = buildFit(total, sGo, sBuy, opt, concerns);
-
-    var grade = total >= 85 ? 'A' : total >= 70 ? 'B' : total >= 55 ? 'C' : 'D';
-    var GRADE_TXT = {
-      A: '整体条件优秀，可以进入砍价/签约环节',
-      B: '主体条件可接受，按清单补齐几项即可',
-      C: '存在明确短板，务必实地核实后再决定',
-      D: '关键保障缺失较多，除非价格极低否则不建议'
+    /* 用途门槛要用的几个距离与环境 / 采买分：门槛看的是「这个用途能不能用」，不是权重 */
+    var nM = nearest(poiBag.metro), nB = nearest(poiBag.bus), nC = nearest(poiBag.convenience);
+    var fitCtx = {
+      med: nm ? nm.distance : null,
+      fire: nf ? nf.distance : null,
+      metro: nM ? nM.distance : null,
+      bus: nB ? nB.distance : null,
+      cv: nC ? nC.distance : null,
+      env: sEnv, buyScore: sBuy
     };
+    var fit = buildFit(total, sGo, sBuy, opt, concerns, fitCtx);
+
+    var grade = gradeOf(total);
 
     /* —— 排序找出亮点与短板 ——
      * 显示的权重是「在总分里的实际占比」，所以要乘上 (1-SPEC_W)；
@@ -1054,6 +1135,11 @@
       (fit.needs.length ? '，另按你在意的「' + fit.needs.join('、') + '」调整' : '，没有勾选在意项') +
       '）。安全分不随用途变化，改动用途只会改适配分。');
     if (fit.floored) note('三块权重设了 8% 的保底：你勾的在意项太多时，某一层会被压到下限而不是归零，避免报告里整块消失。');
+    if (fit.gates && fit.gates.length) {
+      note('用途门槛（「' + fit.purposeName + '」这一档）：' +
+        fit.gates.map(function (g) { return g.t + ' −' + g.cut + ' 分'; }).join('；') +
+        '。门槛合计最多扣 12 分——它是「这个用途能不能用」的硬条件，和权重不是一回事。');
+    }
     if (concerns.length) note('你在意的每一项都单独打了分（' +
       concerns.map(function (c) { return c.name + ' ' + c.score; }).join('、') +
       '），这些分数只用于回答「你在意的这件事这套房做得怎么样」，不反向参与安全分与适配分。');
