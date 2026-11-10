@@ -266,12 +266,25 @@
   }
 
   /* ---------------- 主流程 ---------------- */
+  /* 进度条只进不退：定位 0–4、检索 4–78、路径 78–98、完成 100，
+   * 各阶段本身单调；用 floor 兜住重绘或异常重试造成的往回跳 */
+  var progFloor = 0;
+  function setProg(pct, reset) {
+    if (reset) progFloor = 0;
+    if (pct < progFloor) return;
+    progFloor = pct;
+    $('progBar').style.width = pct + '%';
+  }
+
   function run() {
     var kw = $('addrInput').value.trim();
     if (!kw) return toast('先输入小区名或地址');
+    // 防重入：评估进行中再按回车 / 点候选 / 点重跑，不能让第二轮把进度条拽回起点
+    if (state.running) return toast('正在评估中，这一轮跑完再试');
+    state.running = true;
     $('btnRun').disabled = true;
     $('progWrap').classList.remove('hidden');
-    $('progBar').style.width = '4%';
+    setProg(4, true);
     $('progText').textContent = '正在定位…';
     $('result').innerHTML = '<div class="card empty-state"><div class="big">◐</div>正在检索周边应急与生活资源…</div>';
 
@@ -355,7 +368,7 @@
       afterLocate();
       $('progText').textContent = '正在检索周边资源 0/' + M.QUERIES.length;
       return G.nearBatch(M.QUERIES, place.lng, place.lat, function (done, total, label) {
-        $('progBar').style.width = (4 + (done / total) * 74).toFixed(0) + '%';
+        setProg(4 + (done / total) * 74);
         $('progText').textContent = '正在检索：' + label + '（' + done + '/' + total + '）';
       }).then(function (bag) {
         // 距离补全 + 排序 + 去重
@@ -377,14 +390,14 @@
         });
         $('progText').textContent = '正在计算实际路径 0/' + targets.length;
         return G.routeBatch(place, targets, function (done, total, label) {
-          $('progBar').style.width = (78 + (done / total) * 20).toFixed(0) + '%';
+          setProg(78 + (done / total) * 20);
           $('progText').textContent = '正在计算实际路径：' + label + '（' + done + '/' + total + '）';
         }).catch(function () { return {}; }).then(function (routes) {
           return { bag: bag, place: place, routes: routes };
         });
       });
     }).then(function (r) {
-      $('progBar').style.width = '100%';
+      setProg(100);
       $('progText').textContent = '检索完成，正在计算评分…';
       opt.routes = r.routes || {};
       var res = M.evaluate(r.bag, opt);
@@ -404,6 +417,7 @@
       }
       $('progWrap').classList.add('hidden');
       $('btnRun').disabled = false;
+      state.running = false;
       // 报告已按当前坐标算完，微调提示条收起
       var ab = $('adjustBar'); if (ab) ab.style.display = 'none';
       try {
@@ -413,6 +427,7 @@
     }).catch(function (err) {
       $('progWrap').classList.add('hidden');
       $('btnRun').disabled = false;
+      state.running = false;
       $('result').innerHTML = '<div class="card pad"><h3>评估失败</h3><p class="muted" style="margin-top:8px">' +
         esc(err && err.message ? err.message : String(err)) + '</p></div>';
     });
