@@ -410,6 +410,65 @@
     } catch (e) {}
   }
 
+  /* ---------------- 报告分享（2026-11-10 新增） ----------------
+   * 「复制报告链接」不能只复制地址栏：同一地址换个用途、换几个在意项、换房屋专项，
+   * 适配分和专项分都会变。所以要把当次口径一起编码进 ?s=，
+   * 对方打开才是同一份报告，而不是「同一个地址 + 一套默认答案」算出来的另一份分。 */
+  function shareState() {
+    return {
+      a: $('addrInput').value.trim(),
+      m: state.mode,
+      p: state.purpose,
+      n: currentNeeds(),
+      o: stripOpt(readOpt())
+    };
+  }
+  function buildShareUrl() {
+    return location.origin + location.pathname + '?s=' +
+      encodeURIComponent(JSON.stringify(shareState()));
+  }
+  function restoreShare(d) {
+    if (!d || !d.a) return false;
+    $('addrInput').value = d.a;
+    if (d.m === 'buy' || d.m === 'rent') setMode(d.m);
+    if (d.p && RS.model.FIT.BASE[d.p]) {
+      state.purpose = d.p;
+      document.querySelectorAll('#purposeChips button').forEach(function (x) {
+        x.classList.toggle('on', x.dataset.p === d.p);
+      });
+    }
+    if (d.n && d.n.length) {
+      NEED_PAIRS.forEach(function (pair) {
+        var el = $(pair[0]);
+        if (el) el.checked = d.n.indexOf(pair[1]) >= 0;
+      });
+    }
+    if (d.o) applyOpt(d.o);
+    return true;
+  }
+  /* 落地提示：告诉对方这是别人的报告，不是他自己填的 */
+  function showSharedTip() {
+    var box = document.createElement('div');
+    box.className = 'alert ok no-print';
+    box.style.margin = '14px 0 0';
+    box.innerHTML = '这是别人分享给你的一份居住条件报告：地址、用途、在意项与房屋信息都按原样还原。' +
+      '<a href="' + location.pathname + '" style="margin-left:8px;font-weight:600">我自己测一个 →</a>';
+    var wrap = document.querySelector('.wrap');
+    if (wrap) wrap.insertBefore(box, wrap.firstChild);
+  }
+  function copyText(txt, okMsg) {
+    function done() { toast(okMsg); }
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = txt; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (e) { toast('复制失败，请手动复制地址栏'); }
+      document.body.removeChild(ta);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(done, fallback);
+    } else fallback();
+  }
+
   var MARK_COLORS = { med: '#b42318', fire: '#c2410c', shelter: '#1a7f37',
                       supermarket: '#0f6b5c', metro: '#1d4ed8', police: '#4338ca' };
   /* 地图点位：跑完检索要画，点候选直接出报告也要画，所以抽出来 */
@@ -566,6 +625,10 @@
       });
     }
     var bp = $('btn-print'); if (bp) bp.onclick = function () { window.print(); };
+    var bsh = $('btn-share');
+    if (bsh) bsh.onclick = function () {
+      copyText(buildShareUrl(), '报告链接已复制：发给房东 / 室友 / 中介，打开就是同一份');
+    };
     var bc = $('btn-copy');
     if (bc) bc.onclick = function () {
       var txt = RS.render.toText(state.result, state.lastPlace);
@@ -949,6 +1012,17 @@
     var bp2 = $('btnResetPos'); if (bp2) bp2.onclick = resetPos;
 
     // URL 直达
+    var sq = new URLSearchParams(location.search).get('s');
+    if (sq) {
+      // 分享链接：口径齐了才重跑，缺一项就是另一份报告，不如不跑
+      try {
+        if (restoreShare(JSON.parse(decodeURIComponent(sq)))) {
+          showSharedTip();
+          setTimeout(run, 300);
+          return;
+        }
+      } catch (e) {}
+    }
     var q = new URLSearchParams(location.search).get('addr');
     var m = new URLSearchParams(location.search).get('mode');
     // ?mode= 只认 buy / rent，其他值一律回落 rent（否则权重表为空、总分恒为 0）
