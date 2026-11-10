@@ -11,8 +11,9 @@
   }
   function fmt(m) { return M.fmtDist(m); }
 
-  /* 总分环 */
-  function ring(score, grade) {
+  /* 总分环。label 说明环里这个数是什么分——
+   * 2026-11-10 起环里放的是「适配分」（随用途变），不再固定放安全分。 */
+  function ring(score, label) {
     var R = 70, C = 2 * Math.PI * R;
     var off = C * (1 - score / 100);
     var col = M.scoreColor(score);
@@ -22,7 +23,8 @@
       '<circle cx="85" cy="85" r="' + R + '" fill="none" stroke="' + col + '" stroke-width="14" ' +
       'stroke-linecap="round" stroke-dasharray="' + C.toFixed(1) + '" stroke-dashoffset="' + off.toFixed(1) + '" ' +
       'transform="rotate(-90 85 85)"/>' +
-      '</svg><div class="num"><div><b style="color:' + col + '">' + score + '</b><span>安全分 / 100</span></div></div></div>'
+      '</svg><div class="num"><div><b style="color:' + col + '">' + score + '</b><span>' +
+      (label || '综合得分 / 100') + '</span></div></div></div>'
     );
   }
 
@@ -188,6 +190,12 @@
   /** 渲染完整报告 */
   function report(el, res, place) {
     var modeTxt = res.mode === 'rent' ? '租房' : '购房';
+    /* 头部分数：有适配分就显示适配分（随用途变化），否则退回安全分。
+     * 徽章、等级文案、页面标题都跟着这个数走，避免「环里是 86、徽章按 88 判 A」这种自相矛盾。 */
+    var FIT = res.fit || null;
+    var mainScore = FIT ? FIT.score : res.score;
+    var mainGrade = FIT ? FIT.grade : res.grade;
+    var mainTxt = FIT ? (FIT.gradeTxt || res.gradeTxt) : res.gradeTxt;
     var f = res.facts;
     var rows = [
       { k: '综合医院', v: f.med && f.med.name, d: f.med && f.med.distance, r: f.med && f.med.route, p: f.med },
@@ -320,22 +328,44 @@
         (f.alts.length > 1 ? '<span class="alts-hint">（点一下即可切换用途重算）</span>' : '') + '</div>' +
         (f.spread != null && f.spread < 15
           ? '<p class="hint small muted" style="margin:8px 0 0">这套房安全、通勤、采买三块只差 ' + f.spread +
-            ' 分（' + bsc[0] + '–' + bsc[bsc.length - 1] + '），所以换用途时总分变化不大——' +
-            '权重确实变了，只是三块本身水平接近，加权平均自然拉不开。三块差距大的房源（比如地铁很远但医院很近），换用途的差别会非常明显。</p>'
+            ' 分（' + bsc[0] + '–' + bsc[bsc.length - 1] + '），所以光换权重时总分变化不大；' +
+            '真正拉开差距的是各用途的门槛——上面「用途门槛」那几条决定这个用途到底能不能用。' +
+            '三块本身差距大的房源（比如地铁很远但医院很近），换用途的差别会更明显。</p>'
           : '');
+
+      /* 最合适的用途与当前用途差多少：这是「同一地点换用途分数确实不同」最直接的一句 */
+      var bestNote = (f.best && f.gapToBest > 0.3)
+        ? '<p class="hint small muted" style="margin:8px 0 0">这套房最合「' + esc(f.best.name) + '」（' +
+          f.best.score + ' 分），比你现在选的「' + esc(f.purposeName) + '」高 ' + f.gapToBest + ' 分。</p>'
+        : '';
+
+      /* 用途门槛：每个用途的硬条件。没通过就明写出来——
+       * 「换个用途分数变了」的理由必须能被读到，否则用户只会觉得数字在乱跳。 */
+      var gateHtml = '<div style="margin-top:12px;padding:9px 11px;border-radius:9px;background:' +
+        ((f.gates && f.gates.length) ? '#fdf1e7' : '#f4f8f6') + '">' +
+        '<b class="small">用途门槛' + ((f.gates && f.gates.length) ? ' −' + f.gateCut + ' 分' : '：全部通过') + '</b>' +
+        '<ul class="ev" style="margin:5px 0 0">' +
+        ((f.gates && f.gates.length)
+          ? f.gates.map(function (g) {
+              return '<li><b>' + esc(g.t) + '</b>（−' + g.cut + ' 分）：' + esc(g.why) + '</li>';
+            }).join('')
+          : '<li>这个用途的硬条件（地铁与公交距离、医院距离、环境分、采买分）都达到了，没有额外扣分。</li>') +
+        '</ul></div>';
 
       return '<section class="card pad" style="margin-bottom:16px">' +
         '<div class="sec-t">综合适配' +
           '<span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500;font-size:12px">　用途：' +
-          esc(f.purposeName) + '　权重 ' + f.weights.safe + ' / ' + f.weights.go + ' / ' + f.weights.buy + '</span>' +
+          esc(f.purposeName) + '　权重 ' + f.weights.safe + ' / ' + f.weights.go + ' / ' + f.weights.buy +
+          ((f.gates && f.gates.length) ? '　门槛 −' + f.gateCut : '') + '</span>' +
         '</div>' +
         '<div style="display:flex;align-items:center;gap:12px;margin:2px 0 14px">' +
           '<div style="font-size:32px;font-weight:800;line-height:1;color:' + M.scoreColor(f.score) + '">' +
             f.score + '</div>' +
           '<div class="bar" style="flex:1;margin:0"><i style="width:' + f.score +
             '%;background:' + M.scoreColor(f.score) + '"></i></div>' +
-          '<div class="small muted" style="white-space:nowrap">比安全分 ' +
-            (f.delta > 0 ? '+' : '') + f.delta + '</div>' +
+          '<div class="small muted" style="white-space:nowrap;text-align:right;line-height:1.5">' +
+            '加权 ' + f.raw + ((f.gates && f.gates.length) ? '<br>门槛 −' + f.gateCut : '') +
+          '</div>' +
         '</div>' +
         wbar +
         f.blocks.map(function (b) {
@@ -347,10 +377,12 @@
               b.score + '</b>' +
           '</div>';
         }).join('') +
+        gateHtml +
         '<div class="alert ' + (f.score >= 70 ? 'ok' : 'warn') + '">' + esc(f.verdict) + '</div>' +
         trace +
         cx +
         alts +
+        bestNote +
         '<p class="hint small muted" style="margin:10px 0 0">' + esc(RS.model.FIT.intro) +
           '　' + esc(f.purposeNote) + '</p>' +
       '</section>';
@@ -362,11 +394,18 @@
     el.innerHTML =
       /* 结论 */
       '<section class="card pad" style="margin-bottom:16px">' +
-        '<div class="verdict">' + ring(res.score, res.grade) +
+        '<div class="verdict">' + ring(mainScore, FIT ? '适配分 / 100' : '安全分 / 100') +
           '<div>' +
-            '<h3>' + esc(place.title) + ' <span class="grade ' + res.grade + '">' + res.grade + ' 级</span></h3>' +
-            '<p>' + esc(res.gradeTxt) + '。本次按「' + modeTxt + '」口径评估，' +
-              '共检索分级半径内（' + (RS.model.RADIUS_TXT || '1–6 km') + '）' +
+            '<h3>' + esc(place.title) + ' <span class="grade ' + mainGrade + '">' + mainGrade + ' 级</span></h3>' +
+            '<p>' +
+              (FIT
+                ? '按「' + esc(FIT.purposeName) + '」的' + modeTxt + '口径：适配分 <b>' + FIT.score +
+                  '</b>，安全分 <b>' + res.score + '</b>（安全分不随用途变化）。换一个用途、或改勾「最在意」，' +
+                  '这个数会跟着重算，下面的权重推演里写着每一步。'
+                : '本次按「' + modeTxt + '」口径评估。') +
+            '</p>' +
+            '<p class="small muted" style="margin-top:6px">' + esc(mainTxt) + '。共检索分级半径内（' +
+              (RS.model.RADIUS_TXT || '1–6 km') + '）' +
               Object.keys(res.poiBag).length + ' 类生活与应急资源。</p>' +
             '<div class="tagline">' +
               '<span class="tag">优势：' + esc(res.highlights.join(' · ')) + '</span>' +
@@ -456,7 +495,8 @@
         '实际决策请以实地勘察与官方登记信息为准。' +
       '</div>';
 
-    document.title = place.title + ' · 居住评估 ' + res.score + ' 分';
+    document.title = place.title + ' · 适配 ' + mainScore + ' 分' +
+      (FIT ? '（' + FIT.purposeName + '）' : '');
     return el;
   }
 
@@ -465,13 +505,24 @@
     var L = [];
     L.push('【' + place.title + '】居住条件评估报告');
     L.push('地址：' + place.addr + '　口径：' + (res.mode === 'rent' ? '租房' : '购房'));
-    L.push('综合得分：' + res.score + ' / 100（' + res.grade + ' 级）— ' + res.gradeTxt);
     if (res.fit) {
-      L.push('综合适配：' + res.fit.score + ' / 100（用途「' + res.fit.purposeName + '」，比安全分 ' +
-        (res.fit.delta > 0 ? '+' : '') + res.fit.delta + '）');
+      L.push('综合评分：适配 ' + res.fit.score + ' / 100（' + res.fit.grade + ' 级，用途「' +
+        res.fit.purposeName + '」）　｜　安全 ' + res.score + ' / 100（' + res.grade + ' 级，不随用途变化）');
+    } else {
+      L.push('综合得分：' + res.score + ' / 100（' + res.grade + ' 级）— ' + res.gradeTxt);
+    }
+    if (res.fit) {
+      L.push('（适配分 = 三块加权 ' + res.fit.raw + ' − 门槛 ' + res.fit.gateCut + '）');
       res.fit.blocks.forEach(function (b) {
         L.push('　· ' + b.name + '：' + b.score + '（权重 ' + b.weight + '%）');
       });
+      if (res.fit.gates && res.fit.gates.length) {
+        res.fit.gates.forEach(function (g) {
+          L.push('　· 门槛没过：' + g.t + ' −' + g.cut + ' 分 —— ' + g.why);
+        });
+      } else {
+        L.push('　· 门槛：这个用途的硬条件全部通过');
+      }
       if (res.fit.trace) {
         L.push('　权重推演：' + res.fit.trace.map(function (r) {
           return r.label + '〔' + r.v.join(' / ') + '〕';
@@ -486,6 +537,10 @@
       }
       if (res.fit.alts && res.fit.alts.length > 1) {
         L.push('　换个用途：' + res.fit.alts.map(function (a) { return a.name + ' ' + a.score; }).join(' · '));
+        if (res.fit.best && res.fit.gapToBest > 0.3) {
+          L.push('　最合「' + res.fit.best.name + '」（' + res.fit.best.score + ' 分，比当前用途高 ' +
+            res.fit.gapToBest + ' 分）');
+        }
       }
       L.push('　· ' + res.fit.verdict);
     }
