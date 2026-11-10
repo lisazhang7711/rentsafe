@@ -3,11 +3,14 @@
  * 输入：周边 POI 检索结果 + 真实路径规划结果 + 用户补充信息
  * 输出：五维得分（+ 不计分的生活配套参考）、总分、等级、结论、清单、风险项
  *
- * 距离口径说明：
- *   distance —— 高德周边搜索返回的「直线距离」，仅用于快速排序与粗筛；
- *   route    —— AMap.Walking / AMap.Driving 算出的真实路径长度与耗时，
- *               报告里凡出现「步行 X 约 N 分钟 / 驾车 X 约 N 分钟」均来自 route，
- *               绝不由直线距离简单折算。
+ * 距离口径说明（2026-11-10 改）：
+ *   distance —— 默认就是「步行路网距离」：app.js 用 AMap.Walking 对每类最近的
+ *               2–4 个点位算出真实步行路线长度，写回 distance，并按它重排。
+ *               消防站例外，按 AMap.Driving 算消防车到场距离。
+ *   line     —— 原始的直线距离（高德周边搜索返回），只作参考写在括号里。
+ *   route    —— { d, t, mode }，路网距离与耗时；报告里「步行 X 约 N 分钟」用它。
+ *   没有算到路网的点位（每类里排在第 4 个之后的）按 line × 1.3 估值并标 est，
+ *   它们既不进计分（计分只取最近一个），也不会被写成「实测路网距离」。
  */
 (function () {
   var RS = (window.RS = window.RS || {});
@@ -392,7 +395,7 @@
           else if (/变电站/.test(x.label)) { p = Math.min(8, x.cut * 1.6); }
           else if (/加油/.test(x.label)) { p = Math.min(8, x.cut * 1.6); }
           pen += p;
-          ev3.push(x.label + '：' + x.name + '（' + fmtDist(x.distance) + '）' +
+          ev3.push(x.label + '：' + x.name + '（' + shortDist(x) + '）' +
             (p ? '，噪声 / 异味 −' + Math.round(p) + ' 分' : '，不构成噪声干扰'));
         });
         if (h.floor >= 1 && h.floor <= 3) {
@@ -422,7 +425,7 @@
           ['最近医院：' + (nearest(medChain(bag)) ? distTxt(nearest(medChain(bag)), R.med) : '5 km 内未检索到'),
            '垂直交通：' + ({ ok: '电梯正常', flaky: '电梯常故障', none: '无电梯', unk: '电梯情况未确认' }[opt.elevator] || '未确认') +
              (h.floor ? '，本房在 ' + h.floor + ' 层' : ''),
-           '消防可达性：' + c.sFire + ' 分（' + (nearest(bag.fire) ? '最近站 ' + fmtDist(nearest(bag.fire).distance) : '6 km 内未检索到') + '）',
+           '消防可达性：' + c.sFire + ' 分（' + (nearest(bag.fire) ? '最近站 ' + shortDist(nearest(bag.fire)) : '6 km 内未检索到') + '）',
            '口径：医疗 40% + 垂直交通 30% + 消防疏散 30%']);
       }
 
@@ -575,14 +578,28 @@
   /** 路径文本：步行 1.2 km 约 15 分钟 / 驾车 3.4 km 约 9 分钟 */
   function routeTxt(r) {
     if (!r || !r.d) return '';
-    return (r.mode === 'drive' ? '驾车 ' : '步行 ') + fmtDist(r.d) + ' 约 ' + r.t + ' 分钟';
+    var mv = r.mode === 'drive' ? '驾车 ' : '步行 ';
+    return mv + fmtDist(r.d) + (r.t ? ' 约 ' + r.t + ' 分钟' : '');
   }
-  /** 点位距离文本：直线距离 + 真实路径（有则附） */
+  /**
+   * 点位距离文本。默认口径是步行路网距离，直线只作括号里的参考：
+   *   「步行 1.2 km 约 15 分钟（直线 0.9 km）」
+   * 没算到路网的点位降到 line × 1.3 的估值，会明确写「直线」而不是含糊带过。
+   */
   function distTxt(p, r) {
     if (!p) return '未检索到';
-    var s = fmtDist(p.distance);
-    var rt = routeTxt(r);
-    return rt ? s + '，' + rt : s + '（直线）';
+    var rt = r || p.route || null;
+    // 用逗号而不是嵌套括号：外层调用处已经有一层「（…）」了
+    var lineTxt = p.line != null ? '，直线 ' + fmtDist(p.line) : '';
+    if (rt && rt.d) return routeTxt(rt) + lineTxt;
+    // 老候选（距离口径改版前存的）没有路网，标注「直线」而不是含糊带过
+    return fmtDist(p.distance) + (p.est ? '（直线折算，未取到路网）' : '（直线）');
+  }
+  /** 短距离标签，用在「最近 3 家」这类列表里：步行 180 m / 1.2 km（直线） */
+  function shortDist(p) {
+    if (!p || p.distance == null) return '—';
+    if (p.walk) return (p.via === 'drive' ? '车行 ' : '步行 ') + fmtDist(p.distance);
+    return fmtDist(p.distance) + '（直线）';
   }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
   function round(v) { return Math.round(v * 10) / 10; }
@@ -793,7 +810,7 @@
     sEm = clamp(sEm, 0, 100);
     ev.em = [
       '最近医院：' + (nm ? nm.name + '（' + distTxt(nm, R.med) + '）' : '5 km 内未检索到'),
-      '社区卫生服务中心：' + (nearest(poiBag.clinic) ? fmtDist(nearest(poiBag.clinic).distance) : '未检索到'),
+      '社区卫生服务中心：' + (nearest(poiBag.clinic) ? shortDist(nearest(poiBag.clinic)) : '未检索到'),
       '药店：' + (poiBag.pharmacy && poiBag.pharmacy.length
         ? poiBag.pharmacy.length + ' 家，最近 ' + distTxt(nearest(poiBag.pharmacy), R.pharmacy)
         : '未检索到')
@@ -857,7 +874,7 @@
       '便利店：' + (poiBag.convenience && poiBag.convenience.length
         ? '共 ' + poiBag.convenience.length + ' 家，最近 ' +
           poiBag.convenience.slice(0, 3).map(function (p) {
-            return p.name + '（' + fmtDist(p.distance) + '）';
+            return p.name + '（' + shortDist(p) + '）';
           }).join(' · ')
         : '未检索到'),
       '断电容忍：' + (opt.device ? '有需电医疗设备（制氧机/呼吸机/冷藏药品），停电风险被放大' :
@@ -897,15 +914,15 @@
     sAmen = clamp(sAmen, 0, 100);
     var amenEv = [
       '地铁：' + (nearest(poiBag.metro) ? nearest(poiBag.metro).name + '（' + distTxt(nearest(poiBag.metro), R.metro) + '）' : '3 km 内未检索到'),
-      '公交：' + (nearest(poiBag.bus) ? nearest(poiBag.bus).name + '（' + fmtDist(nearest(poiBag.bus).distance) + '）' : '1 km 内未检索到'),
+      '公交：' + (nearest(poiBag.bus) ? nearest(poiBag.bus).name + '（' + shortDist(nearest(poiBag.bus)) + '）' : '1 km 内未检索到'),
       // 采买同时关系日常运转与断电补给，列最近 3 家方便拿去看房时实地核对
       '超市/菜场：' + ((poiBag.supermarket || []).length || (poiBag.market || []).length
         ? (poiBag.supermarket || []).concat(poiBag.market || [])
             .sort(function (a, b) { return a.distance - b.distance; })
-            .slice(0, 3).map(function (p) { return p.name + '（' + fmtDist(p.distance) + '）'; }).join(' · ')
+            .slice(0, 3).map(function (p) { return p.name + '（' + shortDist(p) + '）'; }).join(' · ')
         : '未检索到'),
-      '便利店：' + (nearest(poiBag.convenience) ? nearest(poiBag.convenience).name + '（' + fmtDist(nearest(poiBag.convenience).distance) + '）' : '1.5 km 内未检索到'),
-      '加油站/加气站：' + (nearest(poiBag.gas) ? nearest(poiBag.gas).name + '（' + fmtDist(nearest(poiBag.gas).distance) + '）' : '1.5 km 内未检索到')
+      '便利店：' + (nearest(poiBag.convenience) ? nearest(poiBag.convenience).name + '（' + shortDist(nearest(poiBag.convenience)) + '）' : '1.5 km 内未检索到'),
+      '加油站/加气站：' + (nearest(poiBag.gas) ? nearest(poiBag.gas).name + '（' + shortDist(nearest(poiBag.gas)) + '）' : '1.5 km 内未检索到')
     ];
 
     /* —— 通勤分与采买分（供综合适配层使用）——
@@ -972,7 +989,7 @@
     if (opt.topfloor && opt.age != null && Number(opt.age) >= 20) sEnv -= 3 * envMul;  // 老房顶层渗漏
     sEnv = clamp(sEnv, 0, 100);
     ev.env = (envHits.length
-      ? envHits.map(function (x) { return x.label + '：' + x.name + '（' + fmtDist(x.distance) + '，−' + x.cut + ' 分）'; })
+      ? envHits.map(function (x) { return x.label + '：' + x.name + '（' + shortDist(x) + '，−' + x.cut + ' 分）'; })
       : ['1.5 km 内未检索到垃圾站、加油站、变电站等环境影响因素；3 km 内未检索到殡葬设施'])
       .concat(opt.flood ? ['场地历史：该处曾发生内涝或积水（按你填写的信息计入，−' + Math.round(10 * envMul) + ' 分）'] : []);
 
@@ -1051,7 +1068,7 @@
     if (opt.elevator === 'flaky' && h.floor >= 7) risk('warn', '电梯经常故障', '高层日常与紧急疏散都依赖电梯，频繁困人说明维保不到位。要求查看最近一次年检标志与维保记录。');
 
     if (!nm || nm.distance > 3000) risk('warn', '医疗距离偏远', '最近医疗机构超过 3 km，突发疾病时送医时间不可控，家中有老人小孩尤其要谨慎。');
-    if (opt.elderly && nm && nm.distance > 2000) risk('warn', '老人就医距离偏长', '最近医院 ' + fmtDist(nm.distance) + '，老人突发状况时每一分钟都很关键。建议确认社区医生上门服务与 120 响应时间。');
+    if (opt.elderly && nm && nm.distance > 2000) risk('warn', '老人就医距离偏长', '最近医院 ' + shortDist(nm) + '，老人突发状况时每一分钟都很关键。建议确认社区医生上门服务与 120 响应时间。');
     if (!nf || nf.distance > 4000) risk('dan', '消防站覆盖弱', '最近消防救援站超过 4 km，高层住宅火灾主要依赖内部消防设施与自救，务必现场确认消火栓、烟感与疏散通道。');
     // 高层和超高层都要判（原来只写了 high，34 层以上的 super 反而漏掉了）
     if ((lv === 'high' || lv === 'super') && (!nf || nf.distance > 2500))
@@ -1066,7 +1083,7 @@
     envHits.forEach(function (x) {
       if (x.riskAt && x.distance <= x.riskAt) {
         risk('warn', '环境因素过近：' + x.label,
-          '「' + x.name + '」距目标约 ' + fmtDist(x.distance) + '。' + x.why +
+          '「' + x.name + '」距目标约 ' + shortDist(x) + '。' + x.why +
           (mode === 'buy' ? '买房口径下这一类按 ' + ENV_MODE_MUL.buy + ' 倍计扣分——它会长期挂在估值上。' : ''));
       }
     });
@@ -1148,6 +1165,7 @@
       ({ fixed: '固定车位', street: '路边随停', none: '无车位', unk: '未确认' }[opt.parking] || '未确认') +
       '），不进安全分。');
     note('环境风险按影响确定性分档扣分：垃圾站 16 分（异味、蚊蝇、清运车噪声，长期且确定）；内涝 10 分；加油站与变电站各 5 分（按低概率事故 + 长期噪声计，不按「会爆炸」计——近 20 年国内加油站事故全部源于施工检修违规或泄漏，变电站事故后果主要是短时停电，未见住宅结构损伤或居民伤亡）。');
+    note('距离口径：本报告所有距离都是高德步行路网距离（按实际能走的路线算，不是两点连线），消防站按消防车驾车路线算。每类对最近的几个点位逐条规划，算完按路网距离重新排序——所以「直线很近、却要绕一大圈」的点位不会排在前面。括号里的「直线」只作参考。');
 
     /* —— 清单 —— */
     var p72 = buildPower72(poiBag, opt, R, h);
@@ -1157,7 +1175,8 @@
       if (!p) return null;
       var o = {};
       for (var k in p) o[k] = p[k];
-      o.route = r || null;
+      // 点位自己已经算过路网（p.route）时不能被空的路由表覆盖掉
+      o.route = r || p.route || null;
       return o;
     }
 
@@ -1247,12 +1266,12 @@
     var m = nearest(poi.market), s = nearest(poi.supermarket), c = nearest(poi.convenience);
     var near = [s, m, c].filter(Boolean).sort(function (a, b) { return a.distance - b.distance; })[0];
     var rid = near === s ? 'supermarket' : near === m ? 'market' : 'convenience';
-    var rt = R && R[rid];
+    var rt = (near && near.route) || (R && R[rid]);
     L.push({
-      t: '补给点：' + (near ? near.name + '（' + (rt ? routeTxt(rt) + '，实测路网距离'
-          : '直线 ' + fmtDist(near.distance) + '，按路网折算约 ' + Math.max(1, Math.round(near.distance / 80 * 1.25)) + ' 分钟') + '）'
+      t: '补给点：' + (near ? near.name + '（' + (rt ? routeTxt(rt)
+          : fmtDist(near.distance) + '，未取到路网，按步行折算') + '）'
           : '附近未检索到稳定补给点'),
-      s: rt ? '以上为高德实际步行路径，非直线距离换算' : '未取到实际路径，此处的分钟数为直线距离按路网系数折算的估值'
+      s: rt ? '以上为高德实际步行路径长度，不是直线距离' : '未取到路网，此处的分钟数为直线距离按绕行系数折算的估值'
     });
     L.push({
       t: '药品：退烧、止泻、抗过敏、创可贴、慢性病用药各备一份',
