@@ -208,18 +208,83 @@
     elder:        { name: '家有老人' },
     resale:       { name: '看重转手 / 保值' }
   };
-  function levelOf(v) { return v >= 85 ? '满足' : v >= 70 ? '基本满足' : v >= 55 ? '勉强' : '不满足'; }
+  /* —— 等级口径：从「绝对分数」改成「相对位置」（2026-11-10 第四版）——
+   * 为什么改：距离口径换成步行路网后，同一地址的分数普遍降 5–8 分（路网距离必然 ≥ 直线），
+   * 而 85 / 70 / 55 这套固定门槛会把整体往下压一档，出现「同一套房上周 A、这周 B」这种假信号。
+   * 现在等级只看这个分数在参考基准里排到什么位置，评分口径再调也只影响分数，不连锁改档位。
+   *
+   * REF_PTS 是手标的分位锚点（城市住宅常见条件的估计分布，中间线性插值）。
+   * 之所以是「估计」不是实测：手上没有全市房源的抽样分。锚点刻意取得保守——
+   * 79 分 ≈ 优于 85% 的房源（A 线），64.5 ≈ 优于 55%（B 线），50 ≈ 优于 20%（C 线）。
+   * 报告里如实写「基准假设」，不谎称是统计分位。改这里就能整体挪动档位线。 */
+  var REF_PTS = [
+    [100, 99], [90, 96], [85, 92], [79, 85], [75, 78], [70, 68],
+    [64.5, 55], [58, 36], [50, 20], [45, 12], [30, 2], [0, 0.5]
+  ];
 
-  /* 等级文案。提到模块作用域是因为现在有两个分数都要用：
-   * 安全分（evaluate 里）和综合适配分（buildFit 里）。
-   * 头部分数改成适配分之后，徽章与这句话必须跟着适配分走，不能各说各的。 */
-  var GRADE_TXT = {
-    A: '整体条件优秀，可以进入砍价/签约环节',
-    B: '主体条件可接受，按清单补齐几项即可',
-    C: '存在明确短板，务必实地核实后再决定',
-    D: '关键保障缺失较多，除非价格极低否则不建议'
-  };
-  function gradeOf(v) { return v >= 85 ? 'A' : v >= 70 ? 'B' : v >= 55 ? 'C' : 'D'; }
+  /** 分数 -> 百分位（「优于基准里百分之多少的房源」） */
+  function pctOf(v) {
+    var s = clamp(v, 0, 100);
+    for (var i = 1; i < REF_PTS.length; i++) {
+      var hi = REF_PTS[i - 1], lo = REF_PTS[i];
+      if (s >= lo[0]) {
+        var t = (s - lo[0]) / (hi[0] - lo[0]);
+        return round(lo[1] + t * (hi[1] - lo[1]));
+      }
+    }
+    return 0;
+  }
+  /** 百分位 -> 分数：把档位边界换算回分数，报告里要把这条换算写清楚 */
+  function cutOf(pct) {
+    for (var i = 1; i < REF_PTS.length; i++) {
+      var hi = REF_PTS[i - 1], lo = REF_PTS[i];
+      if (pct <= hi[1] && pct >= lo[1]) {
+        var t = (pct - lo[1]) / ((hi[1] - lo[1]) || 1);
+        return round(lo[0] + t * (hi[0] - lo[0]));
+      }
+    }
+    return pct >= 99 ? 100 : 0;
+  }
+
+  /* 档位按相对位置划，不按分数：A 优于 85% 以上 / B 55–85% / C 20–55% / D 20% 以下 */
+  var BANDS = [
+    { g: 'A', pct: 85, txt: '条件优于参考基准里 85% 的房源，可以进入砍价/签约环节' },
+    { g: 'B', pct: 55, txt: '优于 55%–85% 的房源：主体条件可接受，按清单补齐几项即可' },
+    { g: 'C', pct: 20, txt: '优于 20%–55% 的房源：存在明确短板，务必实地核实后再决定' },
+    { g: 'D', pct: 0,  txt: '优于不到 20% 的房源：关键保障缺失较多，除非价格极低否则不建议' }
+  ];
+  var GRADE_TXT = { A: BANDS[0].txt, B: BANDS[1].txt, C: BANDS[2].txt, D: BANDS[3].txt };
+  function gradeOf(v) {
+    var p = pctOf(v);
+    for (var i = 0; i < BANDS.length; i++) if (p >= BANDS[i].pct) return BANDS[i].g;
+    return 'D';
+  }
+  /** 一个分数对应的完整档位信息：字母、百分位、一句话、三条档位边界分数 */
+  function gradeMeta(v) {
+    var p = pctOf(v), g = gradeOf(v);
+    return {
+      grade: g, pct: p,
+      /* 用「优于 X%」而不是「前 X%」：后者在 C/D 档会写成「前 92%」，容易读反 */
+      pctTxt: p >= 99 ? '基准最高一档' : '优于 ' + p + '% 的房源',
+      txt: GRADE_TXT[g],
+      cuts: { A: cutOf(85), B: cutOf(55), C: cutOf(20) }
+    };
+  }
+  var GRADE_COLOR = { A: '#1a7f37', B: '#0f6b5c', C: '#c2410c', D: '#b42318' };
+  function gradeColor(g) { return GRADE_COLOR[g] || '#5b6573'; }
+
+  /* 单项评语的「好 / 一般 / 差」也用这三条线，不另设 85 / 70 / 55：
+   * 否则同一个 66 分会出现「（基本满足）：通勤偏累」这种自相矛盾的句子。 */
+  var AUTO = cutOf(85);   // ≈ 79.0  A 线
+  var WEAK = cutOf(55);   // ≈ 64.5  B 线
+  var BAD  = cutOf(20);   // ≈ 50.0  C 线
+
+  /* 「满足 / 基本满足 / 勉强 / 不满足」跟等级共用同一条阶梯，
+   * 否则报告里会出现「82 分（A 级）」但某项写「基本满足」的错位。 */
+  function levelOf(v) {
+    var g = gradeOf(v);
+    return g === 'A' ? '满足' : g === 'B' ? '基本满足' : g === 'C' ? '勉强' : '不满足';
+  }
 
   /** 用途 + 需求 -> 最终三块权重（已归一化到 100）与推演过程 */
   function fitWeights(purpose, needs) {
@@ -342,9 +407,9 @@
       if (id === 'commuteDaily') {
         var mt = nearest(bag.metro), bs = nearest(bag.bus);
         add(id, c.sGo,
-          (c.sGo >= 85 ? '地铁与公交都在步行可接受范围内，日常通勤不折腾。'
-           : c.sGo >= 70 ? '能通勤，但离站还有一段距离，雨天和加班晚了会比较明显。'
-           : c.sGo >= 55 ? '通勤偏累：站点不算近，建议工作日早高峰实地走一次再决定。'
+          (c.sGo >= AUTO ? '地铁与公交都在步行可接受范围内，日常通勤不折腾。'
+           : c.sGo >= WEAK ? '能通勤，但离站还有一段距离，雨天和加班晚了会比较明显。'
+           : c.sGo >= BAD ? '通勤偏累：站点不算近，建议工作日早高峰实地走一次再决定。'
            : '通勤这块基本没有便利可言，除非你有车或能接受长距离接驳。'),
           ['地铁：' + (mt ? distTxt(mt, R.metro) : '3 km 内未检索到'),
            '公交：' + (bs ? distTxt(bs, R.bus) : '1 km 内未检索到'),
@@ -356,9 +421,9 @@
         var gasS = ({ pipe: 95, bottle: 72, none: 52, unk: 74 })[opt.gas] || 74;
         var sc = c.sBuy * .7 + gasS * .3;
         add(id, sc,
-          (sc >= 85 ? '买菜、买调料、临时补货都在步行范围内，自己开火的成本很低。'
-           : sc >= 70 ? '日常做饭没问题，个别食材可能要跑一趟远一点的超市。'
-           : sc >= 55 ? '采买不算方便，常做饭的话要提前规划一周的采购。'
+          (sc >= AUTO ? '买菜、买调料、临时补货都在步行范围内，自己开火的成本很低。'
+           : sc >= WEAK ? '日常做饭没问题，个别食材可能要跑一趟远一点的超市。'
+           : sc >= BAD ? '采买不算方便，常做饭的话要提前规划一周的采购。'
            : '采买距离偏远，常做饭很消耗精力，先确认生鲜配送是否覆盖这里。'),
           ['菜市场：' + (mk ? distTxt(mk, R.market) : '2 km 内未检索到'),
            '超市：' + (sp ? distTxt(sp, R.supermarket) : '2 km 内未检索到'),
@@ -373,9 +438,9 @@
         var gs = distScore(bag.gas, [[800, 100], [1500, 88], [3000, 70]], 55);
         var scCar = pk * .6 + gs * .4;
         add(id, scCar,
-          (scCar >= 85 ? '有固定车位、加油也近，用车成本低。'
-           : scCar >= 70 ? '用车基本顺手，车位或加油至少占了一样便宜。'
-           : scCar >= 55 ? '停车是这一项的短板，老小区尤其要提前问清车位归属与月租。'
+          (scCar >= AUTO ? '有固定车位、加油也近，用车成本低。'
+           : scCar >= WEAK ? '用车基本顺手，车位或加油至少占了一样便宜。'
+           : scCar >= BAD ? '停车是这一项的短板，老小区尤其要提前问清车位归属与月租。'
            : '车位与加油两项都偏弱，有车的话日常会持续添麻烦。'),
           ['车位：' + ({ fixed: '有固定 / 产权车位', street: '只能路边随停', none: '小区无车位',
                         unk: '未确认（按老小区常见情况估）' }[opt.parking] || '未确认'),
@@ -405,9 +470,9 @@
         if (!ev3.length) ev3.push('1.5–3 km 内没有垃圾站、加油站、变电站、殡葬设施，也没有登记临街信息');
         ev3.push('建议晚上 21:00 之后再来一次：楼上脚步、电梯井、马路低频噪声白天根本听不出来');
         add(id, 100 - pen,
-          (100 - pen >= 85 ? '环境安静，近处没有持续噪声源。'
-           : 100 - pen >= 70 ? '整体安静，只有一处轻度噪声源，关窗基本能解决。'
-           : 100 - pen >= 55 ? '噪声是明显的日常干扰，务必在晚高峰与夜间各去一次。'
+          (100 - pen >= AUTO ? '环境安静，近处没有持续噪声源。'
+           : 100 - pen >= WEAK ? '整体安静，只有一处轻度噪声源，关窗基本能解决。'
+           : 100 - pen >= BAD ? '噪声是明显的日常干扰，务必在晚高峰与夜间各去一次。'
            : '噪声与异味会长期影响睡眠，除非你对声音不敏感，否则建议直接放弃。'),
           ev3);
       }
@@ -418,9 +483,9 @@
                  : opt.elevator === 'none' ? (h.floor >= 4 ? 22 : 78) : 64;
         var scE = c.sEm * .4 + vert * .3 + c.sFire * .3;
         add(id, scE,
-          (scE >= 85 ? '就医近、上下楼方便、消防可达性也好，是适合老人的条件。'
-           : scE >= 70 ? '基本合适，但电梯或医疗距离里有一项要盯紧。'
-           : scE >= 55 ? '有一项会直接为难老人：优先看低楼层、或离医院更近的房源。'
+          (scE >= AUTO ? '就医近、上下楼方便、消防可达性也好，是适合老人的条件。'
+           : scE >= WEAK ? '基本合适，但电梯或医疗距离里有一项要盯紧。'
+           : scE >= BAD ? '有一项会直接为难老人：优先看低楼层、或离医院更近的房源。'
            : '这套对老人不友好，垂直交通与医疗可达性至少有一项明显不够。'),
           ['最近医院：' + (nearest(medChain(bag)) ? distTxt(nearest(medChain(bag)), R.med) : '5 km 内未检索到'),
            '垂直交通：' + ({ ok: '电梯正常', flaky: '电梯常故障', none: '无电梯', unk: '电梯情况未确认' }[opt.elevator] || '未确认') +
@@ -433,9 +498,9 @@
         var specPart = c.mode === 'buy' ? c.spec.score : 74;
         var scR = c.sGo * .35 + c.sEnv * .30 + specPart * .20 + c.sBuy * .15;
         add(id, scR,
-          (scR >= 85 ? '地铁、环境、产权三样都不拖后腿，转手时议价空间小。'
-           : scR >= 70 ? '保值能力正常，短板不在流动性上。'
-           : scR >= 55 ? '有一项会压价：买家最容易拿地铁距离和周边嫌恶设施砍价。'
+          (scR >= AUTO ? '地铁、环境、产权三样都不拖后腿，转手时议价空间小。'
+           : scR >= WEAK ? '保值能力正常，短板不在流动性上。'
+           : scR >= BAD ? '有一项会压价：买家最容易拿地铁距离和周边嫌恶设施砍价。'
            : '流动性偏弱，将来出手可能要接受更长的挂牌周期或更低的报价。'),
           ['地铁（流动性）：' + (nearest(bag.metro) ? distTxt(nearest(bag.metro), R.metro) : '3 km 内未检索到'),
            '环境风险分：' + round(c.sEnv) + '（嫌恶设施直接压估值）',
@@ -463,9 +528,9 @@
     var delta = round(score - safeScore);
 
     var verdict;
-    if (score >= 85) verdict = '按「' + base.name + '」看，这套很匹配，短板也在可接受范围。';
-    else if (score >= 70) verdict = '按「' + base.name + '」看基本合适，' + weakest.name + '是最该去现场确认的一块。';
-    else if (score >= 55) verdict = '按「' + base.name + '」看有明显不匹配的地方，' + weakest.name + '只有 ' + weakest.score + ' 分。';
+    if (score >= AUTO) verdict = '按「' + base.name + '」看，这套很匹配，短板也在可接受范围。';
+    else if (score >= WEAK) verdict = '按「' + base.name + '」看基本合适，' + weakest.name + '是最该去现场确认的一块。';
+    else if (score >= BAD) verdict = '按「' + base.name + '」看有明显不匹配的地方，' + weakest.name + '只有 ' + weakest.score + ' 分。';
     else verdict = '按「' + base.name + '」看不太对得上，' + weakest.name + '拖得很明显，除非价格有优势否则不必花时间。';
 
     /* 门槛没过是最硬的理由，必须排在结论句前面说清楚 */
@@ -482,7 +547,7 @@
     var worst = null;
     (concerns || []).forEach(function (c) { if (!worst || c.score < worst.score) worst = c; });
     if (worst) {
-      if (worst.score < 70) verdict += ' 你在意的「' + worst.name + '」只有 ' + worst.score + ' 分（' + worst.level + '）：' + worst.note;
+      if (worst.score < WEAK) verdict += ' 你在意的「' + worst.name + '」只有 ' + worst.score + ' 分（' + worst.level + '）：' + worst.note;
       else verdict += ' 你在意的几项里最弱的是「' + worst.name + '」，' + worst.score + ' 分（' + worst.level + '）。';
     }
 
@@ -499,11 +564,13 @@
      * 差距不到 0.3 分就不必说，否则报告里会出现「低 0.1 分」这种噪声。 */
     var best = alts.slice().sort(function (a, b) { return b.score - a.score; })[0];
 
+    var gm = gradeMeta(score);
     return {
       purpose: f.key, purposeName: base.name, purposeNote: base.note,
       needs: f.used.map(function (n) { return FIT.NEEDS[n].name; }),
       weights: w, score: score,
-      grade: gradeOf(score), gradeTxt: GRADE_TXT[gradeOf(score)],
+      grade: gm.grade, gradeTxt: gm.txt,
+      pct: gm.pct, pctTxt: gm.pctTxt, cuts: gm.cuts,
       delta: delta, verdict: verdict, weakest: weakest.name, blocks: blocks,
       trace: f.rows, floored: f.floored, alts: alts, concerns: concerns || [],
       raw: round(raw), gates: gates, gateCut: round(gateCut),
@@ -643,12 +710,9 @@
     return tierBonus((list || []).length, DENSITY_TIERS[kind] || DENSITY_TIERS.store);
   }
   function nearest(list) { return list && list.length ? list[0] : null; }
-  function scoreColor(v) {
-    if (v >= 85) return '#1a7f37';
-    if (v >= 70) return '#0f6b5c';
-    if (v >= 55) return '#c2410c';
-    return '#b42318';
-  }
+  /* 颜色也走等级色：整份报告只有一条阶梯，避免「环是绿的、某一维 80 分却是青的」
+   * 这种两边不一致的观感。改档位线（REF_PTS）时颜色会自动跟着走。 */
+  function scoreColor(v) { return gradeColor(gradeOf(v)); }
   // 基层机构不算「医院」：社区卫生服务中心、卫生院、服务站只作补充
   var MED_BASIC = /社区卫生服务中心|卫生院|服务站|卫生室|门诊/;
   // 注：不要把「中医」算作综合医院的判定词——中医院与综合医院的急诊/手术能力不同，
@@ -1027,7 +1091,7 @@
     };
     var fit = buildFit(total, sGo, sBuy, opt, concerns, fitCtx);
 
-    var grade = gradeOf(total);
+    var gm = gradeMeta(total);
 
     /* —— 排序找出亮点与短板 ——
      * 显示的权重是「在总分里的实际占比」，所以要乘上 (1-SPEC_W)；
@@ -1041,11 +1105,11 @@
     var sorted = arr.slice().sort(function (a, b) { return b.score - a.score; });
     var highlights = sorted.slice(0, 2).map(function (x) { return x.name + ' ' + x.score + ' 分'; });
     var gaps = sorted.slice(-2).reverse().map(function (x) { return x.name + ' ' + x.score + ' 分'; });
-    if (spec.score < 70) gaps.push(specName + ' ' + spec.score + ' 分');
+    if (spec.score < WEAK) gaps.push(specName + ' ' + spec.score + ' 分');
     /* 最在意的项不合格，比任何五维短板都更该出现在结论标签里 */
     if (concerns.length) {
       var wc0 = concerns.slice().sort(function (a, b) { return a.score - b.score; })[0];
-      if (wc0.score < 70) gaps.push('你在意的「' + wc0.name + '」' + wc0.score + ' 分');
+      if (wc0.score < WEAK) gaps.push('你在意的「' + wc0.name + '」' + wc0.score + ' 分');
     }
 
     /* —— 风险项 —— */
@@ -1108,8 +1172,8 @@
      * 这是整份报告里最该被看见的一节——用户勾「怕吵」，结果比任何维度分都直接。 */
     concerns.forEach(function (c) {
       var why = c.note + ' ' + (c.evidence[0] || '');
-      if (c.score < 55) risk('dan', '你在意的「' + c.name + '」不满足', why);
-      else if (c.score < 70) risk('warn', '你在意的「' + c.name + '」勉强达标', why);
+      if (c.score < BAD) risk('dan', '你在意的「' + c.name + '」不满足', why);
+      else if (c.score < WEAK) risk('warn', '你在意的「' + c.name + '」勉强达标', why);
     });
 
     if (!risks.length) risk('ok', '未发现显著硬伤', '关键保障资源齐备，按下方清单做常规核实即可。');
@@ -1181,7 +1245,8 @@
     }
 
     return {
-      mode: mode, score: total, grade: grade, gradeTxt: GRADE_TXT[grade],
+      mode: mode, score: total, grade: gm.grade, gradeTxt: gm.txt,
+      pct: gm.pct, pctTxt: gm.pctTxt, cuts: gm.cuts,
       dims: arr, highlights: highlights, gaps: gaps, risks: risks,
       envHits: envHits, power72: p72, visit: visit, weight: W, env: opt, notes: notes,
       /* 第二层：按用途加权的综合适配（安全分不受用途影响） */
@@ -1353,6 +1418,9 @@
     FIT: FIT, evaluate: evaluate, fmtDist: fmtDist, haversine: haversine,
     routeTxt: routeTxt, distTxt: distTxt, resolveHeight: resolveHeight,
     MED_NOISE: MED_NOISE, pickMed: pickMed, medChain: medChain,
-    scoreColor: scoreColor, clamp: clamp
+    scoreColor: scoreColor, clamp: clamp,
+    /* 等级按相对位置划（2026-11-10）：外面要用到分数 -> 百分位 / 颜色，一并导出 */
+    gradeOf: gradeOf, gradeMeta: gradeMeta, gradeColor: gradeColor,
+    pctOf: pctOf, cutOf: cutOf, BANDS: BANDS, REF_PTS: REF_PTS
   };
 })();
