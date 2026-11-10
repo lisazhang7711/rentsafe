@@ -1,5 +1,5 @@
 /**
- * 安居安全评估 · 配置
+ * 安居综合评估 · 配置
  * Key 支持四级覆盖：URL 参数 ?key=xxx&sec=xxx  >  localStorage  >  config.local.js  >  此处默认值
  *
  * 安全提醒（必读）：
