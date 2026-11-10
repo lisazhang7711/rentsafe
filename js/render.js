@@ -12,11 +12,12 @@
   function fmt(m) { return M.fmtDist(m); }
 
   /* 总分环。label 说明环里这个数是什么分——
-   * 2026-11-10 起环里放的是「适配分」（随用途变），不再固定放安全分。 */
-  function ring(score, label) {
+   * 2026-11-10 起环里放的是「适配分」（随用途变），不再固定放安全分。
+   * 颜色跟等级走（等级按相对位置划），不跟绝对分数走，否则环是青色、徽章却是 A。 */
+  function ring(score, label, grade) {
     var R = 70, C = 2 * Math.PI * R;
     var off = C * (1 - score / 100);
-    var col = M.scoreColor(score);
+    var col = M.gradeColor(grade || M.gradeOf(score));
     return (
       '<div class="score-ring"><svg width="170" height="170" viewBox="0 0 170 170">' +
       '<circle cx="85" cy="85" r="' + R + '" fill="none" stroke="#eceff2" stroke-width="14"/>' +
@@ -204,6 +205,14 @@
     var mainScore = FIT ? FIT.score : res.score;
     var mainGrade = FIT ? FIT.grade : res.grade;
     var mainTxt = FIT ? (FIT.gradeTxt || res.gradeTxt) : res.gradeTxt;
+    /* 等级按相对位置划：环与徽章的颜色都取等级色，百分位与档位线并排写出来，
+     * 免得用户以为「82 分只是 B」——它在基准里其实优于 88% 的房源。 */
+    var CUTS = (FIT && FIT.cuts) || res.cuts || null;
+    var mainPctTxt = FIT ? FIT.pctTxt : res.pctTxt;
+    var ladder = CUTS
+      ? 'A 优于 85% 以上（≥ ' + CUTS.A + ' 分）｜ B 55–85%（' + CUTS.B + '–' + CUTS.A +
+        '）｜ C 20–55%（' + CUTS.C + '–' + CUTS.B + '）｜ D 低于 ' + CUTS.C + ' 分'
+      : '';
     var f = res.facts;
     var rows = [
       { k: '综合医院', v: f.med && f.med.name, d: f.med && f.med.distance, r: f.med && f.med.route, p: f.med },
@@ -367,12 +376,13 @@
           ((f.gates && f.gates.length) ? '　门槛 −' + f.gateCut : '') + '</span>' +
         '</div>' +
         '<div style="display:flex;align-items:center;gap:12px;margin:2px 0 14px">' +
-          '<div style="font-size:32px;font-weight:800;line-height:1;color:' + M.scoreColor(f.score) + '">' +
+          '<div style="font-size:32px;font-weight:800;line-height:1;color:' + M.gradeColor(f.grade) + '">' +
             f.score + '</div>' +
           '<div class="bar" style="flex:1;margin:0"><i style="width:' + f.score +
-            '%;background:' + M.scoreColor(f.score) + '"></i></div>' +
+            '%;background:' + M.gradeColor(f.grade) + '"></i></div>' +
           '<div class="small muted" style="white-space:nowrap;text-align:right;line-height:1.5">' +
             '加权 ' + f.raw + ((f.gates && f.gates.length) ? '<br>门槛 −' + f.gateCut : '') +
+            (f.pctTxt ? '<br>' + esc(f.pctTxt) : '') +
           '</div>' +
         '</div>' +
         wbar +
@@ -402,9 +412,10 @@
     el.innerHTML =
       /* 结论 */
       '<section class="card pad" style="margin-bottom:16px">' +
-        '<div class="verdict">' + ring(mainScore, FIT ? '适配分 / 100' : '安全分 / 100') +
+        '<div class="verdict">' + ring(mainScore, FIT ? '适配分 / 100' : '安全分 / 100', mainGrade) +
           '<div>' +
-            '<h3>' + esc(place.title) + ' <span class="grade ' + mainGrade + '">' + mainGrade + ' 级</span></h3>' +
+            '<h3>' + esc(place.title) + ' <span class="grade ' + mainGrade + '">' + mainGrade + ' 级</span>' +
+              '<span class="small muted" style="font-weight:500;margin-left:6px">' + esc(mainPctTxt) + '</span></h3>' +
             '<p>' +
               (FIT
                 ? '按「' + esc(FIT.purposeName) + '」的' + modeTxt + '口径：适配分 <b>' + FIT.score +
@@ -420,6 +431,9 @@
               '<span class="tag">短板：' + esc(res.gaps.join(' · ')) + '</span>' +
               '<span class="tag">' + esc(place.addr) + '</span>' +
             '</div>' +
+            (ladder ? '<p class="hint small muted" style="margin:10px 0 0">等级按<b>相对位置</b>划，不按绝对分数：' +
+              ladder + '。参考基准是按城市住宅常见条件设定的估计分布（不是实测抽样），所以改评分口径只会让分数变，' +
+              '不会把整体档位一起往下推。</p>' : '') +
             '<div class="actions no-print">' +
               '<button class="btn sm" id="btn-print">导出 / 打印报告</button>' +
               '<button class="btn sm gray" id="btn-copy">复制文字版</button>' +
@@ -512,13 +526,21 @@
   /** 纯文本版本（用于复制） */
   function toText(res, place) {
     var L = [];
+    var CUTS = (res.fit && res.fit.cuts) || res.cuts || null;
     L.push('【' + place.title + '】居住条件评估报告');
     L.push('地址：' + place.addr + '　口径：' + (res.mode === 'rent' ? '租房' : '购房'));
     if (res.fit) {
-      L.push('综合评分：适配 ' + res.fit.score + ' / 100（' + res.fit.grade + ' 级，用途「' +
-        res.fit.purposeName + '」）　｜　安全 ' + res.score + ' / 100（' + res.grade + ' 级，不随用途变化）');
+      L.push('综合评分：适配 ' + res.fit.score + ' / 100（' + res.fit.grade + ' 级，' +
+        res.fit.pctTxt + '，用途「' +
+        res.fit.purposeName + '」）　｜　安全 ' + res.score + ' / 100（' + res.grade + ' 级，' +
+        res.pctTxt + '，不随用途变化）');
     } else {
-      L.push('综合得分：' + res.score + ' / 100（' + res.grade + ' 级）— ' + res.gradeTxt);
+      L.push('综合得分：' + res.score + ' / 100（' + res.grade + ' 级，' + res.pctTxt + '）— ' + res.gradeTxt);
+    }
+    if (CUTS) {
+      L.push('等级按相对位置划（不按绝对分数）：' +
+        'A 优于 85% 以上（≥ ' + CUTS.A + '）｜ B 55–85%（' + CUTS.B + '–' + CUTS.A + '）' +
+        '｜ C 20–55%（' + CUTS.C + '–' + CUTS.B + '）｜ D 低于 ' + CUTS.C);
     }
     if (res.fit) {
       L.push('（适配分 = 三块加权 ' + res.fit.raw + ' − 门槛 ' + res.fit.gateCut + '）');
