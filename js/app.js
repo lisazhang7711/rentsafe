@@ -677,7 +677,10 @@
       var res = candRes(c);
       var safe = res ? res.score : (c.score != null ? c.score : 0);
       var fit = res && res.fit ? res.fit.score : (c.fit ? c.fit.score : null);
-      var grade = res && res.fit ? res.fit.grade : (c.fit && c.fit.grade ? c.fit.grade : c.grade);
+      /* 等级一律现算：老候选身上存的是旧口径的字母（87 分记成 A），
+       * 换成分位划档后这些字母已经过期，直接读会显示错误档位。 */
+      var main = fit != null ? fit : safe;
+      var grade = M.gradeOf(main);
       return {
         i: i, c: c, res: res, safe: safe, fit: fit, grade: grade,
         dims: res ? res.dims : (c.dims || []),
@@ -812,7 +815,7 @@
         '<div class="cand-main"><span class="nm" title="' + esc(c.addr) + '">' + esc(c.title) +
           (v.live ? '' : ' <span class="muted" style="font-weight:500;font-size:11px">旧记录</span>') + '</span>' +
         '<div class="mini-dims">' + mini + '</div></div>' +
-        '<div class="cand-scores"><span class="sc" style="color:' + M.scoreColor(v.main) + '">' +
+        '<div class="cand-scores"><span class="sc" style="color:' + M.gradeColor(v.grade) + '">' +
           v.main + gap + '</span>' +
           '<span class="fit-sc muted" style="font-weight:500">安全 ' + v.safe + '</span></div>' +
         '<button class="btn sm gray" data-open="' + v.i + '">看</button>' +
@@ -862,7 +865,7 @@
       return '<tr><td>' + label + '</td>' + rows.map(function (v) {
         var x = pick(v);
         if (x == null) return '<td class="v" style="color:#8b95a3">—</td>';
-        return '<td class="v" style="color:' + M.scoreColor(x) + '">' +
+        return '<td class="v" style="color:' + M.gradeColor(M.gradeOf(x)) + '">' +
           (strong ? '<b>' + x + '</b>' : x) + '</td>';
       }).join('') + '</tr>';
     }
