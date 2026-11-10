@@ -436,6 +436,7 @@
               '不会把整体档位一起往下推。</p>' : '') +
             '<div class="actions no-print">' +
               '<button class="btn sm" id="btn-print">导出 / 打印报告</button>' +
+              '<button class="btn sm gray" id="btn-share">复制报告链接</button>' +
               '<button class="btn sm gray" id="btn-copy">复制文字版</button>' +
               '<button class="btn sm gray" id="btn-save">保存为候选</button>' +
             '</div>' +
