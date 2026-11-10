@@ -80,19 +80,27 @@
       'style="max-width:330px;display:block;margin:0 auto;overflow:visible">' + g + labels + '</svg>';
   }
 
-  /* 关键点位表：直线距离 与 实际路网距离/耗时 分列；最后一列给出可点击核查的来源 */
+  /* 关键点位表：步行路网距离（主）与直线距离（参考）分列；最后一列给出可点击核查的来源 */
   function poiTable(rows) {
     var h = '<table class="poi"><thead><tr><th>类别</th><th>最近点位</th>' +
-      '<th class="d">直线</th><th class="d">实际路径</th><th>来源 / 核查</th></tr></thead><tbody>';
+      '<th class="d">步行距离</th><th class="d">直线<br><span style="font-weight:500;font-size:10px;color:#8b95a3;letter-spacing:0">参考</span></th>' +
+      '<th>来源 / 核查</th></tr></thead><tbody>';
     rows.forEach(function (r) {
-      var rt = r.r ? M.routeTxt(r.r) : '';
-      var modeTxt = r.r && r.r.mode === 'drive'
+      /* 路网结果直接挂在点位上（p.route），opt.routes 只是老接口的副本；
+       * 优先取点位上的，避免「点位算过路网但 routes 里没有这一类」时误显示成估算 */
+      var rr = (r.p && r.p.route) || r.r || null;
+      var rt = rr ? M.routeTxt(rr) : '';
+      var modeTxt = rr && rr.mode === 'drive'
         ? '<span class="rc drive">驾车</span>'
         : (rt ? '<span class="rc walk">步行</span>' : '');
+      // 主列是步行路网距离（没有路网时退回直线折算并标注），参考列才是两点连线
+      var line = r.p && r.p.line != null ? r.p.line : r.d;
       h += '<tr><td>' + esc(r.k) + modeTxt + '</td>' +
         '<td>' + (r.v ? esc(r.v) : '<span class="muted">未检索到</span>') + '</td>' +
-        '<td class="d">' + (r.d != null ? fmt(r.d) : '—') + '</td>' +
-        '<td class="d">' + (rt ? '<b>' + esc(rt) + '</b>' : '<span class="muted">—</span>') + '</td>' +
+        '<td class="d">' + (rt ? '<b>' + esc(rt) + '</b>'
+          : (r.d != null ? fmt(r.d) + '<span class="muted" style="font-size:11px"> ' +
+              (r.p && r.p.est ? '估算' : '直线') + '</span>' : '—')) + '</td>' +
+        '<td class="d muted">' + (line != null ? fmt(line) : '—') + '</td>' +
         '<td>' + (r.p ? srcLink(r.p, '核查') : '<span class="muted">—</span>') + '</td></tr>';
     });
     return h + '</tbody></table>';
@@ -163,7 +171,7 @@
         rows +
       '</tbody></table>' +
       '<ul class="ev" style="margin:12px 0 0">' +
-        '<li><b>数据来源：</b>高德开放平台 —— POI 周边检索（名称 / 地址 / 坐标 / 直线距离）+ 路径规划（步行 / 驾车路网距离与耗时）。</li>' +
+        '<li><b>数据来源：</b>高德开放平台 —— POI 周边检索（名称 / 地址 / 坐标）+ 路径规划（步行路网距离与耗时，消防站为驾车）。报告里的距离取后者：对每类最近的几个点位逐条规划，再按路网距离重排。</li>' +
         '<li><b>评估位置：</b>' + esc(center) +
           (place.adjusted ? '（<b>已手动微调</b>过，非地理编码原始结果）' : '（地理编码结果，未微调）') +
           centerLink + '</li>' +
@@ -209,7 +217,7 @@
       { k: '地铁站', v: f.metro && f.metro.name, d: f.metro && f.metro.distance, r: f.metro && f.metro.route, p: f.metro },
       { k: '加油站 / 加气站', v: f.gas && f.gas.name, d: f.gas && f.gas.distance, r: f.gas && f.gas.route, p: f.gas }
     ];
-    var hasRoute = rows.some(function (r) { return r.r && r.r.d; });
+    var hasRoute = rows.some(function (r) { return (r.p && r.p.route && r.p.route.d) || (r.r && r.r.d); });
 
     var dimHtml = res.dims.map(function (d) {
       return '<div class="dim"><div class="dh"><span class="dn">' + esc(d.name) + '</span>' +
@@ -443,9 +451,10 @@
       '<section class="card pad" style="margin-bottom:16px">' +
         '<div class="sec-t">最近关键点位</div>' +
         '<p class="hint small muted" style="margin:-4px 0 10px">' +
-          '「直线」是两点间的空中距离，只用于快速筛选；' +
-          '「实际路径」由高德步行 / 驾车路径规划算出，是真正要花的时间。' +
-          (hasRoute ? '' : '　<span class="warn-inline">本次未取到路网结果，实际路径列为空，报告中不再出现由直线距离换算的分钟数。</span>') +
+          '「步行距离」是高德步行路径规划算出的真实路线长度（消防站按消防车驾车路线），' +
+          '报告里的分数与结论都按这个数字算；「直线」只是两点连线，用来判断点位是否就在附近。' +
+          '拿不到路网时退回「直线 × 1.3 绕行系数」并标注「估算」，不冒充实测。' +
+          (hasRoute ? '' : '　<span class="warn-inline">本次一条路网都没取到（多为网络或配额问题），建议稍后重跑一次。</span>') +
         '</p>' + poiTable(rows) +
       '</section>' +
 
@@ -490,7 +499,7 @@
           ? place.lng.toFixed(6) + ', ' + place.lat.toFixed(6)
           : '未定位') + '<br>' +
         '数据来源：高德开放平台 POI 检索（' + (RS.model.RADIUS_TXT || '分级半径') + '）与路径规划（步行 / 驾车）。' +
-        '「直线」为两点间空中距离，「实际路径」为路网规划结果；未取到路网时不作折算。' +
+        '「步行距离」为高德路网规划结果，消防站为驾车；「直线」为两点间空中距离，仅供参考。' +
         '评分为公开数据推导的参考值，不替代消防验收、房屋质量检测与专业评估；' +
         '实际决策请以实地勘察与官方登记信息为准。' +
       '</div>';
@@ -567,8 +576,9 @@
     ].forEach(function (x) {
       var p = x[1];
       if (!p) return L.push('· ' + x[0] + '：未检索到');
-      L.push('· ' + x[0] + '：' + p.name + '（直线 ' + fmt(p.distance) +
-        (p.route && p.route.d ? '，' + M.routeTxt(p.route) : '') + '）');
+      L.push('· ' + x[0] + '：' + p.name + '（' + (p.route && p.route.d
+        ? M.routeTxt(p.route) + (p.line != null ? '，直线 ' + fmt(p.line) : '')
+        : '直线 ' + fmt(p.distance) + '，未取到路网') + '）');
     });
     if (res.notes && res.notes.length) {
       L.push('');
@@ -603,7 +613,10 @@
       var p = x[1];
       if (!p) { if (x[2] !== 0) L.push('· ' + x[0] + '：未检索到'); return; }
       L.push('· ' + x[0] + '：' + p.name + '｜' + (p.address || '地址未返回') + '｜' +
-        p.lng.toFixed(6) + ',' + p.lat.toFixed(6) + '｜直线 ' + fmt(p.distance));
+        p.lng.toFixed(6) + ',' + p.lat.toFixed(6) + '｜' +
+        (p.walk ? (p.via === 'drive' ? '车行 ' : '步行 ') + fmt(p.distance) +
+          (p.line != null ? '（直线 ' + fmt(p.line) + '）' : '')
+          : '直线 ' + fmt(p.distance)));
     });
     L.push('坐标系统：GCJ-02（高德），粘到 GPS 或其他地图前需转换。');
     L.push('POI 数据存在滞后，消防站与警务点请以官方公布和实地为准；本报告仅供参考，不替代专业评估。');
