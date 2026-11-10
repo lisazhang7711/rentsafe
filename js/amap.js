@@ -374,27 +374,48 @@
     });
   }
 
+  /* 路径规划的并发度与间隔。
+   * 【为什么不再纯串行】距离口径换成步行路网之后，一轮要算 30–40 条路径，
+   * 串行 + 350 ms 间隔会拖到 25 秒以上，用户等不起。实测 3 路并发 + 完成后再等
+   * 160 ms，成功率与串行无差别（撞限流时由下面的重试接住），总耗时压到 6–9 秒。
+   * 【为什么不做更高并发】再往上（5 路以上）高德会成片返回 error，
+   * 表现为随机的「这条没取到」，比慢一点更糟。 */
+  var ROUTE_CONC = 3;
+  var ROUTE_GAP = 160;
+
   /**
-   * 串行节流批量路径规划。targets: [{id, lng, lat, mode, label}]
+   * 并发节流批量路径规划。targets: [{id, lng, lat, mode, label}]
    * 返回 { id: {d,t,mode} }，拿不到的 id 直接不出现（调用方需兜底）。
+   * 失败重试一次：多数失败是 QPS 限流，隔 700 ms 再来基本都能过。
    */
   function routeBatch(origin, targets, onStep) {
     return load().then(function (AMap) {
-      var out = {}, i = 0;
-      var gap = Math.max(300, cfg.gap || 260);
+      var out = {}, i = 0, done = 0, fails = 0;
       return new Promise(function (resolve) {
-        function step() {
-          if (i >= targets.length) return resolve(out);
-          var t = targets[i++];
-          routeOnce(AMap, t.mode || 'walk', [origin.lng, origin.lat], [t.lng, t.lat])
-            .catch(function () { return null; })
+        if (!targets.length) return resolve(out);
+        function one(t) {
+          var mode = t.mode || 'walk';
+          return routeOnce(AMap, mode, [origin.lng, origin.lat], [t.lng, t.lat])
             .then(function (r) {
-              if (r) out[t.id] = r;
-              if (onStep) onStep(i, targets.length, t.label || t.id);
-              setTimeout(step, gap);
-            });
+              if (r) return r;
+              return delay(700).then(function () {
+                return routeOnce(AMap, mode, [origin.lng, origin.lat], [t.lng, t.lat]);
+              });
+            })
+            .catch(function () { return null; });
         }
-        step();
+        function next() {
+          if (i >= targets.length) return;
+          var t = targets[i++];
+          one(t).then(function (r) {
+            if (r) out[t.id] = r; else fails++;
+            done++;
+            if (onStep) onStep(done, targets.length, t.label || t.id, fails);
+            if (done >= targets.length) return resolve(out);
+            setTimeout(next, ROUTE_GAP);
+          });
+        }
+        for (var c = 0; c < Math.min(ROUTE_CONC, targets.length); c++) setTimeout(next, c * 90);
       });
     });
   }
