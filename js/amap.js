@@ -1,5 +1,5 @@
 /**
- * 安居安全评估 · 高德 JS API 封装
+ * 安居综合评估 · 高德 JS API 封装
  * 只使用「Web 端(JS API)」能力：地址联想 / 地理编码 / 周边搜索 / 静态小地图。
  * 不调用 Web 服务 REST 接口（该 Key 类型为 Web 端，REST 会返回 USERKEY_PLAT_NOMATCH）。
  */
