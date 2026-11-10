@@ -1,5 +1,5 @@
 /**
- * 安居安全评估 · 报告渲染
+ * 安居综合评估 · 报告渲染
  */
 (function () {
   var RS = (window.RS = window.RS || {});
@@ -22,7 +22,7 @@
       '<circle cx="85" cy="85" r="' + R + '" fill="none" stroke="' + col + '" stroke-width="14" ' +
       'stroke-linecap="round" stroke-dasharray="' + C.toFixed(1) + '" stroke-dashoffset="' + off.toFixed(1) + '" ' +
       'transform="rotate(-90 85 85)"/>' +
-      '</svg><div class="num"><div><b style="color:' + col + '">' + score + '</b><span>综合安全分 / 100</span></div></div></div>'
+      '</svg><div class="num"><div><b style="color:' + col + '">' + score + '</b><span>安全分 / 100</span></div></div></div>'
     );
   }
 
@@ -256,37 +256,105 @@
       : '';
 
     /* 综合适配：第二层，按用途给安全 / 通勤 / 采买重新加权。
-     * 放在结论下面第一块，是因为它直接回答「这套房适不适合我」，
-     * 而五维安全结构回答的是「它本身靠不靠得住」——两个问题分开摆。 */
-    var fitHtml = res.fit
-      ? '<section class="card pad" style="margin-bottom:16px">' +
-          '<div class="sec-t">综合适配' +
-            '<span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500;font-size:12px">　用途：' +
-            esc(res.fit.purposeName) + '</span>' +
-          '</div>' +
-          '<div style="display:flex;align-items:center;gap:12px;margin:2px 0 12px">' +
-            '<div style="font-size:32px;font-weight:800;line-height:1;color:' + M.scoreColor(res.fit.score) + '">' +
-              res.fit.score + '</div>' +
-            '<div class="bar" style="flex:1;margin:0"><i style="width:' + res.fit.score +
-              '%;background:' + M.scoreColor(res.fit.score) + '"></i></div>' +
-            '<div class="small muted" style="white-space:nowrap">比安全分 ' +
-              (res.fit.delta > 0 ? '+' : '') + res.fit.delta + '</div>' +
-          '</div>' +
-          res.fit.blocks.map(function (b) {
-            return '<div style="display:flex;align-items:center;gap:10px;margin:6px 0">' +
-              '<span class="small" style="flex:0 0 42%">' + esc(b.name) +
-                '<span class="muted" style="margin-left:6px">权重 ' + b.weight + '%</span></span>' +
-              '<div class="bar" style="flex:1;margin:0"><i style="width:' + b.score +
-                '%;background:' + M.scoreColor(b.score) + '"></i></div>' +
-              '<b class="small" style="color:' + M.scoreColor(b.score) + ';flex:0 0 34px;text-align:right">' +
-                b.score + '</b>' +
+     * 这一块必须回答三个问题，少一个用户就会觉得「勾了没用」：
+     *   ① 按我的用途，这套房多少分；
+     *   ② 权重是怎么来的（基准用途 → 每个在意项加减 → 归一化）；
+     *   ③ 我在意的那几件事，这套房到底怎么样（逐条分数 + 依据）。
+     * 第四件事是「换成别的用途会变成多少」，点一下就能现场切。 */
+    var FIT_COL = { safe: '#0f6b5c', go: '#1d4ed8', buy: '#c2410c' };
+    var fitHtml = res.fit ? (function () {
+      var f = res.fit;
+
+      var wbar = '<div class="wbar">' + f.blocks.map(function (b) {
+        return '<i style="width:' + b.weight + '%;background:' + FIT_COL[b.id] + '" title="' +
+          esc(b.name) + ' ' + b.weight + '%">' + (b.weight >= 14 ? '<span>' + b.weight + '%</span>' : '') + '</i>';
+      }).join('') + '</div>' +
+      '<div class="wlegend">' + f.blocks.map(function (b) {
+        return '<span><i style="background:' + FIT_COL[b.id] + '"></i>' + esc(b.name) +
+          ' <b>' + b.weight + '%</b></span>';
+      }).join('') + '</div>';
+
+      var trace = '<table class="wtb"><thead><tr><th>权重来源</th>' +
+        '<th class="d">安全</th><th class="d">通勤</th><th class="d">采买</th></tr></thead><tbody>' +
+        f.trace.map(function (r) {
+          var isNeed = r.kind === 'need';
+          function td(v) {
+            if (isNeed) {
+              if (!v) return '<td class="d mut">—</td>';
+              return '<td class="d" style="color:' + (v > 0 ? '#1a7f37' : '#b42318') + '">' +
+                (v > 0 ? '+' : '') + v + '</td>';
+            }
+            return '<td class="d"><b>' + v + '%</b></td>';
+          }
+          return '<tr class="' + r.kind + '"><td>' + esc(r.label) + '</td>' +
+            td(r.v[0]) + td(r.v[1]) + td(r.v[2]) + '</tr>';
+        }).join('') + '</tbody></table>' +
+        '<p class="hint small muted" style="margin:6px 0 0">' +
+          '基准来自你选的用途；每勾一项「在意」，就在基准上加减对应百分点，最后归一化到 100%。' +
+          (f.floored ? '　某一层低于 8% 的保底，已按 8% 托底后再归一化。' : '') + '</p>';
+
+      var cx = (f.concerns && f.concerns.length)
+        ? '<div class="cs-h">你在意的 ' + f.concerns.length + ' 件事，这套房怎么样</div>' +
+          '<div class="cx-wrap">' + f.concerns.map(function (c) {
+            var col = M.scoreColor(c.score);
+            return '<div class="cx" style="border-left-color:' + col + '">' +
+              '<div class="cx-h"><span class="cx-n">' + esc(c.name) + '</span>' +
+                '<span class="cx-lv" style="color:' + col + ';border-color:' + col + '">' + esc(c.level) + '</span>' +
+                '<span class="cx-sc" style="color:' + col + '">' + c.score + '</span></div>' +
+              '<div class="bar"><i style="width:' + c.score + '%;background:' + col + '"></i></div>' +
+              '<p class="cx-note">' + esc(c.note) + '</p>' +
+              '<ul class="ev">' + c.evidence.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ul>' +
             '</div>';
-          }).join('') +
-          '<div class="alert ' + (res.fit.score >= 70 ? 'ok' : 'warn') + '">' + esc(res.fit.verdict) + '</div>' +
-          '<p class="hint small muted" style="margin:10px 0 0">' + esc(RS.model.FIT.intro) +
-            '　' + esc(res.fit.purposeNote) + '</p>' +
-        '</section>'
-      : '';
+          }).join('') + '</div>'
+        : '<p class="hint small muted" style="margin:10px 0 0">' +
+          '还没勾「最在意什么」——勾上之后，每一项会在这里单独打分并列出依据，' +
+          '不合格的那一项还会进结论句与风险提示。</p>';
+
+      var bsc = f.blocks.map(function (b) { return b.score; }).sort(function (a, b) { return a - b; });
+      var alts = '<div class="alts"><span class="alts-t">同一套房，换个用途会是多少：</span>' +
+        f.alts.map(function (a) {
+          var on = a.key === f.purpose;
+          return '<span class="alt' + (on ? ' on' : '') + '"' + (on ? '' : ' data-altp="' + a.key + '"') + '>' +
+            esc(a.name) + ' <b>' + a.score + '</b></span>';
+        }).join('') +
+        (f.alts.length > 1 ? '<span class="alts-hint">（点一下即可切换用途重算）</span>' : '') + '</div>' +
+        (f.spread != null && f.spread < 15
+          ? '<p class="hint small muted" style="margin:8px 0 0">这套房安全、通勤、采买三块只差 ' + f.spread +
+            ' 分（' + bsc[0] + '–' + bsc[bsc.length - 1] + '），所以换用途时总分变化不大——' +
+            '权重确实变了，只是三块本身水平接近，加权平均自然拉不开。三块差距大的房源（比如地铁很远但医院很近），换用途的差别会非常明显。</p>'
+          : '');
+
+      return '<section class="card pad" style="margin-bottom:16px">' +
+        '<div class="sec-t">综合适配' +
+          '<span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500;font-size:12px">　用途：' +
+          esc(f.purposeName) + '　权重 ' + f.weights.safe + ' / ' + f.weights.go + ' / ' + f.weights.buy + '</span>' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:12px;margin:2px 0 14px">' +
+          '<div style="font-size:32px;font-weight:800;line-height:1;color:' + M.scoreColor(f.score) + '">' +
+            f.score + '</div>' +
+          '<div class="bar" style="flex:1;margin:0"><i style="width:' + f.score +
+            '%;background:' + M.scoreColor(f.score) + '"></i></div>' +
+          '<div class="small muted" style="white-space:nowrap">比安全分 ' +
+            (f.delta > 0 ? '+' : '') + f.delta + '</div>' +
+        '</div>' +
+        wbar +
+        f.blocks.map(function (b) {
+          return '<div style="display:flex;align-items:center;gap:10px;margin:6px 0">' +
+            '<span class="small" style="flex:0 0 46%">' + esc(b.name) + '</span>' +
+            '<div class="bar" style="flex:1;margin:0"><i style="width:' + b.score +
+              '%;background:' + M.scoreColor(b.score) + '"></i></div>' +
+            '<b class="small" style="color:' + M.scoreColor(b.score) + ';flex:0 0 34px;text-align:right">' +
+              b.score + '</b>' +
+          '</div>';
+        }).join('') +
+        '<div class="alert ' + (f.score >= 70 ? 'ok' : 'warn') + '">' + esc(f.verdict) + '</div>' +
+        trace +
+        cx +
+        alts +
+        '<p class="hint small muted" style="margin:10px 0 0">' + esc(RS.model.FIT.intro) +
+          '　' + esc(f.purposeNote) + '</p>' +
+      '</section>';
+    })() : '';
 
     var d = new Date();
     var stamp = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -388,14 +456,14 @@
         '实际决策请以实地勘察与官方登记信息为准。' +
       '</div>';
 
-    document.title = place.title + ' · 安全评估 ' + res.score + ' 分';
+    document.title = place.title + ' · 居住评估 ' + res.score + ' 分';
     return el;
   }
 
   /** 纯文本版本（用于复制） */
   function toText(res, place) {
     var L = [];
-    L.push('【' + place.title + '】安全评估报告');
+    L.push('【' + place.title + '】居住条件评估报告');
     L.push('地址：' + place.addr + '　口径：' + (res.mode === 'rent' ? '租房' : '购房'));
     L.push('综合得分：' + res.score + ' / 100（' + res.grade + ' 级）— ' + res.gradeTxt);
     if (res.fit) {
@@ -404,6 +472,21 @@
       res.fit.blocks.forEach(function (b) {
         L.push('　· ' + b.name + '：' + b.score + '（权重 ' + b.weight + '%）');
       });
+      if (res.fit.trace) {
+        L.push('　权重推演：' + res.fit.trace.map(function (r) {
+          return r.label + '〔' + r.v.join(' / ') + '〕';
+        }).join(' → ') + '（安全 / 通勤 / 采买）');
+      }
+      if (res.fit.concerns && res.fit.concerns.length) {
+        L.push('　— 你在意的几件事 —');
+        res.fit.concerns.forEach(function (c) {
+          L.push('　· ' + c.name + '：' + c.score + ' 分（' + c.level + '）— ' + c.note);
+          c.evidence.forEach(function (e) { L.push('　　　' + e); });
+        });
+      }
+      if (res.fit.alts && res.fit.alts.length > 1) {
+        L.push('　换个用途：' + res.fit.alts.map(function (a) { return a.name + ' ' + a.score; }).join(' · '));
+      }
       L.push('　· ' + res.fit.verdict);
     }
     L.push('');

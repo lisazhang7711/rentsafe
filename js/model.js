@@ -1,5 +1,5 @@
 /**
- * 安居安全评估 · 评分模型
+ * 安居综合评估 · 评分模型
  * 输入：周边 POI 检索结果 + 真实路径规划结果 + 用户补充信息
  * 输出：五维得分（+ 不计分的生活配套参考）、总分、等级、结论、清单、风险项
  *
@@ -162,9 +162,21 @@
    * 每个地址多花 2 次配额，对一次评估 20 多次请求的预算不划算。
    * 通勤改用「最近地铁 + 最近公交」代理，报告里说清这是代理口径。
    */
+  /* 【2026-11-10 二次改版：用途与「最在意」必须改变结论，而不只是改一个百分数】
+   * 上一版把用途做成三块权重的预设，实际用起来有两个问题（用户反馈）：
+   *   ① 幅度太小：需求调整只有 ±5~10 个百分点，归一化后常常只剩 2~3 个点，
+   *      报告里写着「权重 44%」，看不出自己勾的东西到底起没起作用；
+   *   ② 只有权重、没有结论：「怕吵」「有车」这类诉求只影响一个百分数，
+   *      报告里从头到尾没有一句话回答「我怕吵，这套房到底吵不吵」。
+   * 现在补三件事：
+   *   · 权重推演表（trace）：基准用途 → 每条在意项加减 → 归一化，每一步摊开写；
+   *   · 在意项逐条打分（concerns）：每个勾选项独立给 0–100 分 + 依据 + 判定（见 buildConcerns）；
+   *   · 其它用途对照（alts）：同一套房换成别的用途适配分会变成多少，一键可切。
+   * 需求调整幅度放大到 ±6~16 个百分点，保底从 0 提到 8%，
+   * 避免「怕吵 + 家有老人」把通勤压到 0 之后报告里连一行都不剩。 */
   var FIT = {
     name: '综合适配',
-    intro: '安全分回答「出事时靠不靠得住」，这一层回答「按你的用途合不合适」。安全、通勤、采买三块按用途重新加权；安全分本身不随用途变化，方便几套房子横向比。通勤用最近地铁与公交的距离代理，没有取到你公司的真实路线。',
+    intro: '安全分回答「出事时靠不靠得住」，这一层回答「按你的用途合不合适」：安全、通勤、采买三块按用途重新加权，你在意的每一项再单独打分（下面逐条给依据）。安全分本身不随用途变化，方便几套房子横向比。通勤用最近地铁与公交的距离代理，没有取到你公司的真实路线。',
     BASE: {
       commute: { name: '上班通勤自住', safe: .40, go: .45, buy: .15, note: '早出晚归，地铁与公交通勤的时间成本最先被感知。' },
       family:  { name: '家庭常住',     safe: .60, go: .20, buy: .20, note: '家里有老人小孩，应急医疗与消防的权重要压过通勤。' },
@@ -172,38 +184,211 @@
       retire:  { name: '养老 / 图安静', safe: .62, go: .13, buy: .25, note: '日常活动半径小，医疗距离与环境安静比通勤重要。' },
       solo:    { name: '独居 / 学习',   safe: .45, go: .30, buy: .25, note: '一个人住，采买与通勤的便利度权重更高。' }
     },
+    /* 「最在意」的权重调整：归一化后至少要看得出 5 个百分点以上的变化 */
     NEEDS: {
-      commuteDaily: { name: '每天通勤', go: .10, safe: -.05, buy: -.05 },
-      cook:         { name: '常在家做饭', buy: .08, safe: -.04, go: -.04 },
-      car:          { name: '有车', go: -.08, buy: .04, safe: .04 },
-      quiet:        { name: '怕吵 / 看重环境', safe: .06, go: -.03, buy: -.03 },
-      elder:        { name: '家有老人', safe: .08, go: -.04, buy: -.04 },
-      resale:       { name: '看重转手 / 保值', go: .06, buy: .02, safe: -.08 }
-    }
+      commuteDaily: { name: '每天通勤',        go: .16,  safe: -.08, buy: -.08 },
+      cook:         { name: '常在家做饭',      buy: .14, safe: -.06, go: -.06 },
+      car:          { name: '有车',            go: -.14, buy: .06,  safe: .06 },
+      quiet:        { name: '怕吵 / 看重环境', safe: .12, go: -.06, buy: -.06 },
+      elder:        { name: '家有老人',        safe: .14, go: -.07, buy: -.07 },
+      resale:       { name: '看重转手 / 保值', go: .10,  buy: .04,  safe: -.10 }
+    },
+    FLOOR: .08
   };
 
-  /** 三块分数 -> 按用途与需求加权；返回适配分与逐块明细 */
-  function buildFit(safeScore, goScore, buyScore, opt) {
-    var key = FIT.BASE[opt.purpose] ? opt.purpose : 'commute';
+  /* 每个「最在意」项对应一个独立评分卡；分数怎么算见 buildConcerns */
+  var CONCERN_DEF = {
+    commuteDaily: { name: '每天通勤' },
+    cook:         { name: '常在家做饭' },
+    car:          { name: '有车' },
+    quiet:        { name: '怕吵 / 看重环境' },
+    elder:        { name: '家有老人' },
+    resale:       { name: '看重转手 / 保值' }
+  };
+  function levelOf(v) { return v >= 85 ? '满足' : v >= 70 ? '基本满足' : v >= 55 ? '勉强' : '不满足'; }
+
+  /** 用途 + 需求 -> 最终三块权重（已归一化到 100）与推演过程 */
+  function fitWeights(purpose, needs) {
+    var key = FIT.BASE[purpose] ? purpose : 'commute';
     var base = FIT.BASE[key];
     var w = { safe: base.safe, go: base.go, buy: base.buy };
-    var used = [];
-    (opt.needs || []).forEach(function (n) {
-      var d = FIT.NEEDS[n];
-      if (!d) return;
-      used.push(d.name);
+    var rows = [{ label: '基准 · ' + base.name, kind: 'base',
+      v: [Math.round(base.safe * 100), Math.round(base.go * 100), Math.round(base.buy * 100)] }];
+    var used = [], floored = false;
+    (needs || []).forEach(function (n) {
+      var d = FIT.NEEDS[n]; if (!d) return;
+      used.push(n);
       w.safe += d.safe || 0; w.go += d.go || 0; w.buy += d.buy || 0;
+      rows.push({ label: '在意 · ' + d.name, kind: 'need',
+        v: [Math.round((d.safe || 0) * 100), Math.round((d.go || 0) * 100), Math.round((d.buy || 0) * 100)] });
     });
-    // 需求叠加可能把某一项压到 0 以下，先保底再归一化，避免某一层被完全抹掉
     var sum = 0;
-    ['safe', 'go', 'buy'].forEach(function (k) { w[k] = Math.max(.08, w[k]); sum += w[k]; });
-    ['safe', 'go', 'buy'].forEach(function (k) { w[k] = w[k] / sum; });
+    ['safe', 'go', 'buy'].forEach(function (k) {
+      if (w[k] < FIT.FLOOR) { w[k] = FIT.FLOOR; floored = true; }
+      sum += w[k];
+    });
+    var pct = { safe: w.safe / sum * 100, go: w.go / sum * 100, buy: w.buy / sum * 100 };
+    /* 保底要在百分数层面再做一次：归一化会把刚托到 8% 的那一块重新压回 6% 左右，
+     * 那样「保底」就只是句口号。这里把低于 8% 的补到 8%，差额按比例从其他两块扣。 */
+    for (var guard = 0; guard < 3; guard++) {
+      var low = ['safe', 'go', 'buy'].filter(function (k) { return pct[k] < FIT.FLOOR * 100 - .01; });
+      if (!low.length) break;
+      var deficit = 0;
+      low.forEach(function (k) { deficit += FIT.FLOOR * 100 - pct[k]; pct[k] = FIT.FLOOR * 100; floored = true; });
+      var others = ['safe', 'go', 'buy'].filter(function (k) { return low.indexOf(k) < 0; });
+      var osum = others.reduce(function (s, k) { return s + pct[k]; }, 0);
+      if (osum <= 0) break;
+      others.forEach(function (k) { pct[k] -= deficit * pct[k] / osum; });
+    }
+    var out = { safe: Math.round(pct.safe), go: Math.round(pct.go), buy: Math.round(pct.buy) };
+    // 四舍五入会让三块加起来不等于 100，差值补在占比最大的那一块上
+    var diff = 100 - (out.safe + out.go + out.buy);
+    if (diff) {
+      var big = ['safe', 'go', 'buy'].sort(function (a, b) { return pct[b] - pct[a]; })[0];
+      out[big] += diff;
+    }
+    rows.push({ label: '归一化后', kind: 'final', v: [out.safe, out.go, out.buy] });
+    return { key: key, base: base, used: used, rows: rows, w: out, floored: floored };
+  }
 
-    var score = round(clamp(w.safe * safeScore + w.go * goScore + w.buy * buyScore, 0, 100));
+  /** 只算分、不生成文案：给「换成别的用途会怎样」用 */
+  function fitScoreOf(purpose, needs, safe, go, buy) {
+    var f = fitWeights(purpose, needs);
+    return round(clamp(f.w.safe * safe / 100 + f.w.go * go / 100 + f.w.buy * buy / 100, 0, 100));
+  }
+
+  /* ---------------- 最在意项：逐条打分 ----------------
+   * 为什么每条都要单独算：三块权重只能表达「更看重哪一块」，
+   * 但用户勾「怕吵」时想知道的是「这套房吵不吵」，勾「有车」时想知道「停车难不难」。
+   * 权重回答不了这个问题，只能再给每条诉求配一个可解释的分数与依据。
+   * 这些分数只用于展示与结论句，不反向参与总分（否则会被用途与需求互相干扰）。 */
+  function buildConcerns(c) {
+    var opt = c.opt || {}, bag = c.poiBag || {}, R = c.R || {}, h = c.h || { floor: 0, H: 0 };
+    var out = [];
+    function add(id, score, note, ev) {
+      var v = round(clamp(score, 0, 100));
+      out.push({ id: id, name: CONCERN_DEF[id].name, score: v, level: levelOf(v),
+                 note: note, evidence: (ev || []).filter(Boolean) });
+    }
+    (opt.needs || []).forEach(function (id) {
+      if (!CONCERN_DEF[id]) return;
+
+      if (id === 'commuteDaily') {
+        var mt = nearest(bag.metro), bs = nearest(bag.bus);
+        add(id, c.sGo,
+          (c.sGo >= 85 ? '地铁与公交都在步行可接受范围内，日常通勤不折腾。'
+           : c.sGo >= 70 ? '能通勤，但离站还有一段距离，雨天和加班晚了会比较明显。'
+           : c.sGo >= 55 ? '通勤偏累：站点不算近，建议工作日早高峰实地走一次再决定。'
+           : '通勤这块基本没有便利可言，除非你有车或能接受长距离接驳。'),
+          ['地铁：' + (mt ? distTxt(mt, R.metro) : '3 km 内未检索到'),
+           '公交：' + (bs ? distTxt(bs, R.bus) : '1 km 内未检索到'),
+           '口径：通勤分 = 地铁 60% + 公交 40%。没有接你公司的真实路线，请按上面的距离自己折一次']);
+      }
+
+      if (id === 'cook') {
+        var mk = nearest(bag.market), sp = nearest(bag.supermarket), cv = nearest(bag.convenience);
+        var gasS = ({ pipe: 95, bottle: 72, none: 52, unk: 74 })[opt.gas] || 74;
+        var sc = c.sBuy * .7 + gasS * .3;
+        add(id, sc,
+          (sc >= 85 ? '买菜、买调料、临时补货都在步行范围内，自己开火的成本很低。'
+           : sc >= 70 ? '日常做饭没问题，个别食材可能要跑一趟远一点的超市。'
+           : sc >= 55 ? '采买不算方便，常做饭的话要提前规划一周的采购。'
+           : '采买距离偏远，常做饭很消耗精力，先确认生鲜配送是否覆盖这里。'),
+          ['菜市场：' + (mk ? distTxt(mk, R.market) : '2 km 内未检索到'),
+           '超市：' + (sp ? distTxt(sp, R.supermarket) : '2 km 内未检索到'),
+           '便利店：' + (cv ? distTxt(cv, R.convenience) : '1.5 km 内未检索到'),
+           '燃气：' + ({ pipe: '管道天然气（可直接开火）', bottle: '瓶装液化气（要换气，留意软管年限）',
+                        none: '无燃气（只能用电磁炉，爆炒受限）', unk: '未确认燃气类型' }[opt.gas] || '未确认')]);
+      }
+
+      if (id === 'car') {
+        var pk = ({ fixed: 95, street: 54, none: 20, unk: 60 })[opt.parking] || 60;
+        var gasN = nearest(bag.gas);
+        var gs = distScore(bag.gas, [[800, 100], [1500, 88], [3000, 70]], 55);
+        var scCar = pk * .6 + gs * .4;
+        add(id, scCar,
+          (scCar >= 85 ? '有固定车位、加油也近，用车成本低。'
+           : scCar >= 70 ? '用车基本顺手，车位或加油至少占了一样便宜。'
+           : scCar >= 55 ? '停车是这一项的短板，老小区尤其要提前问清车位归属与月租。'
+           : '车位与加油两项都偏弱，有车的话日常会持续添麻烦。'),
+          ['车位：' + ({ fixed: '有固定 / 产权车位', street: '只能路边随停', none: '小区无车位',
+                        unk: '未确认（按老小区常见情况估）' }[opt.parking] || '未确认'),
+           '加油站：' + (gasN ? distTxt(gasN, R.gas) : '1.5 km 内未检索到'),
+           '有车之后地铁不再是唯一选项，报告已按「有车」把通勤权重下调']);
+      }
+
+      if (id === 'quiet') {
+        var pen = 0, ev3 = [];
+        if (opt.street) {
+          pen += 18;
+          ev3.push('临主干道 / 高架 / 铁路：−18 分——这是夜间最难忍的一类，只有实地听才算数');
+        }
+        (c.envHits || []).forEach(function (x) {
+          var p = 0;
+          if (/垃圾/.test(x.label)) { p = Math.min(20, x.cut * 1.25); }
+          else if (/变电站/.test(x.label)) { p = Math.min(8, x.cut * 1.6); }
+          else if (/加油/.test(x.label)) { p = Math.min(8, x.cut * 1.6); }
+          pen += p;
+          ev3.push(x.label + '：' + x.name + '（' + fmtDist(x.distance) + '）' +
+            (p ? '，噪声 / 异味 −' + Math.round(p) + ' 分' : '，不构成噪声干扰'));
+        });
+        if (h.floor >= 1 && h.floor <= 3) {
+          pen += 6;
+          ev3.push('住 ' + h.floor + ' 层：地面噪声与灰尘直冲窗口，−6 分');
+        }
+        if (!ev3.length) ev3.push('1.5–3 km 内没有垃圾站、加油站、变电站、殡葬设施，也没有登记临街信息');
+        ev3.push('建议晚上 21:00 之后再来一次：楼上脚步、电梯井、马路低频噪声白天根本听不出来');
+        add(id, 100 - pen,
+          (100 - pen >= 85 ? '环境安静，近处没有持续噪声源。'
+           : 100 - pen >= 70 ? '整体安静，只有一处轻度噪声源，关窗基本能解决。'
+           : 100 - pen >= 55 ? '噪声是明显的日常干扰，务必在晚高峰与夜间各去一次。'
+           : '噪声与异味会长期影响睡眠，除非你对声音不敏感，否则建议直接放弃。'),
+          ev3);
+      }
+
+      if (id === 'elder') {
+        var vert = opt.elevator === 'ok' ? (h.floor >= 4 ? 88 : 96)
+                 : opt.elevator === 'flaky' ? 52
+                 : opt.elevator === 'none' ? (h.floor >= 4 ? 22 : 78) : 64;
+        var scE = c.sEm * .4 + vert * .3 + c.sFire * .3;
+        add(id, scE,
+          (scE >= 85 ? '就医近、上下楼方便、消防可达性也好，是适合老人的条件。'
+           : scE >= 70 ? '基本合适，但电梯或医疗距离里有一项要盯紧。'
+           : scE >= 55 ? '有一项会直接为难老人：优先看低楼层、或离医院更近的房源。'
+           : '这套对老人不友好，垂直交通与医疗可达性至少有一项明显不够。'),
+          ['最近医院：' + (nearest(medChain(bag)) ? distTxt(nearest(medChain(bag)), R.med) : '5 km 内未检索到'),
+           '垂直交通：' + ({ ok: '电梯正常', flaky: '电梯常故障', none: '无电梯', unk: '电梯情况未确认' }[opt.elevator] || '未确认') +
+             (h.floor ? '，本房在 ' + h.floor + ' 层' : ''),
+           '消防可达性：' + c.sFire + ' 分（' + (nearest(bag.fire) ? '最近站 ' + fmtDist(nearest(bag.fire).distance) : '6 km 内未检索到') + '）',
+           '口径：医疗 40% + 垂直交通 30% + 消防疏散 30%']);
+      }
+
+      if (id === 'resale') {
+        var specPart = c.mode === 'buy' ? c.spec.score : 74;
+        var scR = c.sGo * .35 + c.sEnv * .30 + specPart * .20 + c.sBuy * .15;
+        add(id, scR,
+          (scR >= 85 ? '地铁、环境、产权三样都不拖后腿，转手时议价空间小。'
+           : scR >= 70 ? '保值能力正常，短板不在流动性上。'
+           : scR >= 55 ? '有一项会压价：买家最容易拿地铁距离和周边嫌恶设施砍价。'
+           : '流动性偏弱，将来出手可能要接受更长的挂牌周期或更低的报价。'),
+          ['地铁（流动性）：' + (nearest(bag.metro) ? distTxt(nearest(bag.metro), R.metro) : '3 km 内未检索到'),
+           '环境风险分：' + round(c.sEnv) + '（嫌恶设施直接压估值）',
+           c.mode === 'buy' ? '产权与年限：' + c.spec.score + ' 分'
+             : '租房口径不评产权，这一项按中性 74 分计；真要谈保值，切到「买房」口径再跑一次']);
+      }
+    });
+    return out;
+  }
+
+  /** 三块分数 -> 按用途与需求加权；返回适配分、权重推演、在意项评分与其它用途对照 */
+  function buildFit(safeScore, goScore, buyScore, opt, concerns) {
+    var f = fitWeights(opt.purpose, opt.needs);
+    var base = f.base, w = f.w;
+    var score = round(clamp(w.safe * safeScore / 100 + w.go * goScore / 100 + w.buy * buyScore / 100, 0, 100));
     var blocks = [
-      { id: 'safe', name: '安全（五维 + 专项）', score: round(safeScore), weight: Math.round(w.safe * 100) },
-      { id: 'go',   name: '通勤（地铁 / 公交）',  score: round(goScore),   weight: Math.round(w.go * 100) },
-      { id: 'buy',  name: '采买（超市 / 菜场 / 便利店）', score: round(buyScore), weight: Math.round(w.buy * 100) }
+      { id: 'safe', name: '安全（五维 + 专项）', score: round(safeScore), weight: w.safe },
+      { id: 'go',   name: '通勤（地铁 / 公交）',  score: round(goScore),   weight: w.go },
+      { id: 'buy',  name: '采买（超市 / 菜场 / 便利店）', score: round(buyScore), weight: w.buy }
     ];
     var weakest = blocks.slice().sort(function (a, b) { return a.score - b.score; })[0];
     var delta = round(score - safeScore);
@@ -218,11 +403,32 @@
     if (delta >= 6) verdict += ' 注意：适配分比安全分高 ' + delta + ' 分，高出的部分来自通勤与采买，安全条件没有变好。';
     else if (delta <= -6) verdict += ' 注意：适配分比安全分低 ' + (-delta) + ' 分，配套拖累了整体，安全条件本身没有那么差。';
 
+    /* 你在意的那几项必须进结论句——否则勾选框看起来像没生效 */
+    var worst = null;
+    (concerns || []).forEach(function (c) { if (!worst || c.score < worst.score) worst = c; });
+    if (worst) {
+      if (worst.score < 70) verdict += ' 你在意的「' + worst.name + '」只有 ' + worst.score + ' 分（' + worst.level + '）：' + worst.note;
+      else verdict += ' 你在意的几项里最弱的是「' + worst.name + '」，' + worst.score + ' 分（' + worst.level + '）。';
+    }
+
+    /* 同一套房换用途会变成多少——这是「用途到底有没有起作用」最直白的证据 */
+    var alts = Object.keys(FIT.BASE).map(function (k) {
+      return { key: k, name: FIT.BASE[k].name, score: fitScoreOf(k, opt.needs, safeScore, goScore, buyScore) };
+    });
+    /* 三块分数的离散程度：分数越接近，换用途对总分的影响就越小。
+     * 这不是模型不灵敏，是加权平均的数学性质——报告里要主动说清，
+     * 否则用户会以为「换用途没反应」是 bug。 */
+    var bmin = Math.min(round(safeScore), round(goScore), round(buyScore));
+    var bmax = Math.max(round(safeScore), round(goScore), round(buyScore));
+
     return {
-      purpose: key, purposeName: base.name, purposeNote: base.note,
-      needs: used, weights: { safe: Math.round(w.safe * 100), go: Math.round(w.go * 100), buy: Math.round(w.buy * 100) },
-      score: score, grade: score >= 85 ? 'A' : score >= 70 ? 'B' : score >= 55 ? 'C' : 'D',
-      delta: delta, verdict: verdict, weakest: weakest.name, blocks: blocks
+      purpose: f.key, purposeName: base.name, purposeNote: base.note,
+      needs: f.used.map(function (n) { return FIT.NEEDS[n].name; }),
+      weights: w, score: score,
+      grade: score >= 85 ? 'A' : score >= 70 ? 'B' : score >= 55 ? 'C' : 'D',
+      delta: delta, verdict: verdict, weakest: weakest.name, blocks: blocks,
+      trace: f.rows, floored: f.floored, alts: alts, concerns: concerns || [],
+      spread: round(bmax - bmin)
     };
   }
 
@@ -707,8 +913,15 @@
     for (var k in W) baseScore += S[k] * W[k];
     var total = round(clamp(baseScore * (1 - SPEC_W) + spec.score * SPEC_W, 0, 100));
 
-    /* 第二层：按用途加权的综合适配（安全分不变，另算一个适配分） */
-    var fit = buildFit(total, sGo, sBuy, opt);
+    /* 第二层：按用途加权的综合适配（安全分不变，另算一个适配分）
+     * 先把「最在意」逐条算成分数，再交给 buildFit 一起组装：
+     * 这样报告里既有权重推演，也有「我怕吵，这套房到底吵不吵」的直接回答。 */
+    var concerns = buildConcerns({
+      opt: opt, poiBag: poiBag, R: R, h: h, mode: mode,
+      sEm: sEm, sFire: sFire, sEnv: sEnv, sGo: sGo, sBuy: sBuy,
+      envHits: envHits, spec: spec
+    });
+    var fit = buildFit(total, sGo, sBuy, opt, concerns);
 
     var grade = total >= 85 ? 'A' : total >= 70 ? 'B' : total >= 55 ? 'C' : 'D';
     var GRADE_TXT = {
@@ -731,6 +944,11 @@
     var highlights = sorted.slice(0, 2).map(function (x) { return x.name + ' ' + x.score + ' 分'; });
     var gaps = sorted.slice(-2).reverse().map(function (x) { return x.name + ' ' + x.score + ' 分'; });
     if (spec.score < 70) gaps.push(specName + ' ' + spec.score + ' 分');
+    /* 最在意的项不合格，比任何五维短板都更该出现在结论标签里 */
+    if (concerns.length) {
+      var wc0 = concerns.slice().sort(function (a, b) { return a.score - b.score; })[0];
+      if (wc0.score < 70) gaps.push('你在意的「' + wc0.name + '」' + wc0.score + ' 分');
+    }
 
     /* —— 风险项 —— */
     var risks = [];
@@ -788,6 +1006,14 @@
     if (mode === 'rent' && opt.lease === 'unk' && opt.pay === 'unk')
       risk('warn', '租约条款尚未敲定', '租期与付款方式都没确定就评估，这一块只能按有风险计入；谈拢后重跑一次，分数通常会有变化。');
 
+    /* 你在意的那几项：不满足就进风险提示。
+     * 这是整份报告里最该被看见的一节——用户勾「怕吵」，结果比任何维度分都直接。 */
+    concerns.forEach(function (c) {
+      var why = c.note + ' ' + (c.evidence[0] || '');
+      if (c.score < 55) risk('dan', '你在意的「' + c.name + '」不满足', why);
+      else if (c.score < 70) risk('warn', '你在意的「' + c.name + '」勉强达标', why);
+    });
+
     if (!risks.length) risk('ok', '未发现显著硬伤', '关键保障资源齐备，按下方清单做常规核实即可。');
 
     /* —— 补充信息对评分的影响（透明化） —— */
@@ -824,8 +1050,17 @@
     if (mode === 'buy') note('购房口径：环境嫌恶设施按 ' + ENV_MODE_MUL.buy + ' 倍计扣分（对租客是阶段性损失，对业主是永久估值折损）');
     note('生活配套（地铁 / 公交 / 采买 / 加油）不计入综合安全分：通勤与采买决定住着累不累，属配套设施而非安全条件。');
     note('综合适配分是第二层：安全 ' + fit.weights.safe + '%、通勤 ' + fit.weights.go + '%、采买 ' + fit.weights.buy +
-      '%（用途「' + fit.purposeName + '」' + (fit.needs.length ? '，另计入：' + fit.needs.join('、') : '') +
+      '%（用途「' + fit.purposeName + '」' +
+      (fit.needs.length ? '，另按你在意的「' + fit.needs.join('、') + '」调整' : '，没有勾选在意项') +
       '）。安全分不随用途变化，改动用途只会改适配分。');
+    if (fit.floored) note('三块权重设了 8% 的保底：你勾的在意项太多时，某一层会被压到下限而不是归零，避免报告里整块消失。');
+    if (concerns.length) note('你在意的每一项都单独打了分（' +
+      concerns.map(function (c) { return c.name + ' ' + c.score; }).join('、') +
+      '），这些分数只用于回答「你在意的这件事这套房做得怎么样」，不反向参与安全分与适配分。');
+    if (opt.street) note('临主干道 / 高架 / 铁路：只计入「怕吵」这一项的噪声扣分（−18），不进安全分——它影响的是住着舒不舒服，不是出事时的兜底能力。');
+    if (opt.parking) note('停车条件：只计入「有车」这一项（' +
+      ({ fixed: '固定车位', street: '路边随停', none: '无车位', unk: '未确认' }[opt.parking] || '未确认') +
+      '），不进安全分。');
     note('环境风险按影响确定性分档扣分：垃圾站 16 分（异味、蚊蝇、清运车噪声，长期且确定）；内涝 10 分；加油站与变电站各 5 分（按低概率事故 + 长期噪声计，不按「会爆炸」计——近 20 年国内加油站事故全部源于施工检修违规或泄漏，变电站事故后果主要是短时停电，未见住宅结构损伤或居民伤亡）。');
 
     /* —— 清单 —— */

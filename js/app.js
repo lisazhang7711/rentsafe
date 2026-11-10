@@ -1,5 +1,5 @@
 /**
- * 安居安全评估 · 工作台交互
+ * 安居综合评估 · 工作台交互
  */
 (function () {
   var RS = (window.RS = window.RS || {});
@@ -83,6 +83,10 @@
     for (var k in state.lastOpt) o[k] = state.lastOpt[k];
     o.purpose = state.purpose;
     o.needs = currentNeeds();
+    // 停车与临街也要现读：它们只影响「有车」「怕吵」两项的评分，
+    // 改完不必重新检索 POI，本地重算就够
+    o.street = $('optStreet') ? $('optStreet').checked : false;
+    o.parking = $('optParking') ? $('optParking').value : 'unk';
     var res = M.evaluate(state.lastBag, o);
     state.result = res;
     RS.render.report($('result'), res, state.lastPlace);
@@ -276,6 +280,9 @@
       // 用途与需求：只影响综合适配分的权重，安全分不变
       purpose: state.purpose,
       needs: currentNeeds(),
+      // 这两项只用于「最在意」里的评分（怕吵 / 有车），不进安全分
+      street: $('optStreet') ? $('optStreet').checked : false,
+      parking: $('optParking') ? $('optParking').value : 'unk',
       floor: $('optFloor').value === '' ? null : $('optFloor').value,
       top: $('optTop').value,
       age: $('optAge').value === '' ? null : $('optAge').value,
@@ -431,6 +438,23 @@
 
   /* ---------------- 结果区按钮 ---------------- */
   function bindResultActions() {
+    /* 「同一套房换个用途会是多少」那一排胶囊：点一下就切用途并在本地重算，
+     * 不用重新检索 POI。这是「用途到底有没有起作用」最直观的操作。 */
+    var res = $('result');
+    if (res) {
+      res.querySelectorAll('[data-altp]').forEach(function (el) {
+        el.onclick = function () {
+          var key = el.dataset.altp;
+          state.purpose = key;
+          document.querySelectorAll('#purposeChips button').forEach(function (x) {
+            x.classList.toggle('on', x.dataset.p === key);
+          });
+          refreshFit();
+          var nm = (RS.model.FIT.BASE[key] || {}).name || key;
+          toast('已切到「' + nm + '」，适配分按新权重重算');
+        };
+      });
+    }
     var bp = $('btn-print'); if (bp) bp.onclick = function () { window.print(); };
     var bc = $('btn-copy');
     if (bc) bc.onclick = function () {
@@ -563,6 +587,10 @@
     NEED_PAIRS.forEach(function (p) {
       var el = $(p[0]); if (!el) return;
       el.addEventListener('change', refreshFit);
+    });
+    // 停车条件与临街也直接触发重算（只影响在意项评分，不用重新请求高德）
+    ['optParking', 'optStreet'].forEach(function (id) {
+      var el = $(id); if (el) el.addEventListener('change', refreshFit);
     });
 
     G.initMap($('miniMap'), 116.4074, 39.9042, 11).then(function (map) {

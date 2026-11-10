@@ -1,4 +1,4 @@
-/* 安居安全评估 · 样式表 */
+/* 安居综合评估 · 样式表 */
 :root{
   --bg:#f6f7f9;
   --panel:#ffffff;
@@ -257,6 +257,50 @@ a.src:hover{color:#0f6b5c;border-bottom-style:solid}
 .cmp-tb{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:8px}
 .cmp-tb th,.cmp-tb td{padding:8px 10px;border-bottom:1px solid #eef1f4;text-align:left}
 .cmp-tb td.v{font-weight:650;font-variant-numeric:tabular-nums}
+
+/* ---------- 通用进度条 ----------
+ * 原来只有 .dim .bar 有样式，报告里「综合适配」那几行用的是裸 .bar，
+ * 结果条根本没有高度、看不见——权重与分差全靠文字硬撑，这也是「权重体现不出来」的一部分原因。 */
+.bar{height:6px;background:#eceff2;border-radius:99px;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:99px;transition:width .25s}
+
+/* ---------- 综合适配：权重结构 + 权重推演 + 在意项 ---------- */
+.wbar{display:flex;height:26px;border-radius:8px;overflow:hidden;background:#eceff2;margin:2px 0 8px}
+.wbar i{display:flex;align-items:center;justify-content:center;height:100%;font-style:normal;
+  color:#fff;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
+.wlegend{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-2);margin-bottom:10px}
+.wlegend span{display:inline-flex;align-items:center;gap:6px}
+.wlegend i{width:9px;height:9px;border-radius:2px;display:inline-block}
+
+table.wtb{width:100%;border-collapse:collapse;font-size:13px;margin-top:14px}
+table.wtb th,table.wtb td{padding:6px 8px;border-bottom:1px solid #eef1f4;text-align:left}
+table.wtb th{color:var(--ink-3);font-weight:600;font-size:11.5px;letter-spacing:.03em}
+table.wtb td.d{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+table.wtb td.mut{color:var(--ink-3)}
+table.wtb tr.final td{border-top:1.5px solid var(--line);background:#fafbfc;font-weight:600}
+
+.cs-h{font-size:13px;font-weight:700;color:var(--ink-2);margin:18px 0 10px;
+  padding-top:14px;border-top:1px solid var(--line)}
+.cx-wrap{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:760px){.cx-wrap{grid-template-columns:1fr}}
+.cx{border:1px solid var(--line);border-left:3px solid var(--brand);border-radius:10px;padding:12px 14px;background:#fff}
+.cx .cx-h{display:flex;align-items:center;gap:8px;margin:0 0 7px}
+.cx .cx-n{font-weight:700;font-size:14px;flex:1}
+.cx .cx-lv{font-size:11px;border:1px solid;border-radius:99px;padding:1px 7px;white-space:nowrap}
+.cx .cx-sc{font-weight:800;font-size:17px;font-variant-numeric:tabular-nums}
+.cx .bar{height:5px;margin:0 0 8px}
+.cx .cx-note{margin:0 0 6px;font-size:12.5px;color:var(--ink-2);line-height:1.6}
+.cx .ev{margin:0;padding-left:16px;font-size:12px;color:var(--ink-3);line-height:1.55}
+
+.alts{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);
+  display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12.5px}
+.alts-t{color:var(--ink-2);font-weight:600}
+.alt{border:1px solid var(--line);border-radius:99px;padding:2px 10px;color:var(--ink-2);background:#fff}
+.alt[data-altp]{cursor:pointer}
+.alt[data-altp]:hover{border-color:var(--brand);color:var(--brand)}
+.alt.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.alt b{font-variant-numeric:tabular-nums}
+.alts-hint{color:var(--ink-3);font-size:11.5px}
 
 .toast{
   position:fixed;left:50%;bottom:34px;transform:translateX(-50%) translateY(12px);

@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>房屋安全评估 · 安居安全评估</title>
-<meta name="description" content="输入小区名或地址，约 20 秒生成应急医疗、消防安全、断电韧性、治安门禁、环境风险五维安全评估报告，附生活配套参考。">
-<link rel="stylesheet" href="css/style.css?v=7">
+<title>居住条件评估 · 安居综合评估</title>
+<meta name="description" content="输入小区名或地址，约 20 秒生成居住条件评估报告：五维安全分 + 按用途加权的综合适配分，用途与「最在意」逐项改变权重并单独打分。">
+<link rel="stylesheet" href="css/style.css?v=8">
 </head>
 <body>
 
@@ -13,7 +13,7 @@
   <div class="topbar-in">
     <div class="brand">
       <span class="mark">安</span>
-      <div>安居安全评估<small>租房 / 购房 前的五维安全体检</small></div>
+      <div>安居综合评估<small>居住条件综合体检：五维安全 + 通勤 + 采买 + 按用途适配</small></div>
     </div>
     <nav class="nav">
       <a href="index.html">首页</a>
@@ -47,7 +47,7 @@
             <button type="button" data-p="retire">养老 / 图安静</button>
             <button type="button" data-p="solo">独居 / 学习</button>
           </div>
-          <div class="hint">用途只改「综合适配分」的权重，安全分不变——这样几套房子还能横向比。通勤用最近地铁与公交距离代理，未取到你公司的真实路线。</div>
+          <div class="hint">用途决定「安全 / 通勤 / 采买」三块的基准权重，安全分不变——这样几套房子还能横向比。报告里会写出权重推演过程，以及同一套房换成别的用途会是多少分。通勤用最近地铁与公交距离代理，未取到你公司的真实路线。</div>
         </div>
 
         <div class="field" style="margin:0 0 14px">
@@ -60,6 +60,7 @@
             <label class="chk"><input type="checkbox" id="needElder"> 家有老人</label>
             <label class="chk"><input type="checkbox" id="needResale"> 看重转手 / 保值</label>
           </div>
+          <div class="hint">勾选后不只是调权重：每一项会在报告里单独打 0–100 分、列出依据并给出「满足 / 基本满足 / 勉强 / 不满足」，最弱的那一项还会写进结论句和风险提示。</div>
         </div>
 
         <div class="field ac-wrap">
@@ -181,6 +182,26 @@
                 </select>
               </div>
             </div>
+            <div class="field-row">
+              <div class="field">
+                <label for="optParking">停车条件</label>
+                <select id="optParking">
+                  <option value="unk" selected>不清楚</option>
+                  <option value="fixed">有固定 / 产权车位</option>
+                  <option value="street">只能路边随停</option>
+                  <option value="none">小区无车位</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="optStreet">噪声环境</label>
+                <label class="chk" style="margin-top:6px">
+                  <input type="checkbox" id="optStreet"> 临主干道 / 高架 / 铁路
+                </label>
+              </div>
+            </div>
+            <p class="hint small muted" style="margin:-2px 0 8px">
+              这两项只影响「有车」「怕吵」两项的单独评分，不进安全分——车位和噪声决定住着舒不舒服，不是出事时的兜底能力。
+            </p>
             <div class="chk-grid">
               <label class="chk"><input type="checkbox" id="optBasement"> 地下 / 半地下</label>
               <label class="chk"><input type="checkbox" id="optTopFloor"> 顶层</label>
