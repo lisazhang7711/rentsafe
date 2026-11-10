@@ -495,9 +495,16 @@
   function saveCand() {
     if (!state.result || !state.lastPlace) return;
     var arr = cands();
+    // 去重：同名且坐标基本一致（<150 m）的算同一个小区，覆盖旧记录，不重复占位
+    var p = state.lastPlace;
+    arr = arr.filter(function (c) {
+      var sameSpot = c.lng != null && p.lng != null &&
+        Math.abs(c.lng - p.lng) < .0015 && Math.abs(c.lat - p.lat) < .0015;
+      return !(c.title === p.title || sameSpot);
+    });
     arr.unshift({
-      title: state.lastPlace.title, addr: state.lastPlace.addr,
-      lng: state.lastPlace.lng, lat: state.lastPlace.lat,
+      title: p.title, addr: p.addr,
+      lng: p.lng, lat: p.lat,
       score: state.result.score, grade: state.result.grade,
       mode: state.result.mode,
       fit: state.result.fit ? { score: state.result.fit.score, purposeName: state.result.fit.purposeName } : null,
@@ -512,12 +519,27 @@
     var arr = cands(), box = $('candList');
     if (!box) return;
     if (!arr.length) { box.innerHTML = '<p class="small muted">还没有候选。评估完点「保存为候选」，就能横向对比两套房子。</p>'; return; }
-    box.innerHTML = arr.map(function (c, i) {
+    // 按安全分从高到低展示；data-* 里存的是原始下标，删除/打开不受排序影响
+    var view = arr.map(function (c, i) { return { c: c, i: i }; })
+      .sort(function (a, b) { return b.c.score - a.c.score; });
+    var top = view[0].c.score;
+    box.innerHTML = view.map(function (v) {
+      var c = v.c;
+      // 五维迷你条：总分接近时差异都在这里，一眼看出两套房差在哪一维
+      var mini = (c.dims || []).map(function (d) {
+        return '<i style="background:' + M.scoreColor(d.score) + '" title="' + esc(d.name) + ' ' + d.score + '"></i>';
+      }).join('');
+      var gapTxt = c.score < top ? '<span class="muted" style="font-size:11px;font-weight:500"> −' +
+        (top - c.score).toFixed(1) + '</span>' : '';
+      var fitTxt = c.fit ? '<span class="fit-sc" style="color:' + M.scoreColor(c.fit.score) + '">适配 ' +
+        c.fit.score + '</span>' : '';
       return '<div class="cand-row"><span class="grade ' + c.grade + '">' + c.grade + '</span>' +
-        '<span class="nm" title="' + esc(c.addr) + '">' + esc(c.title) + '</span>' +
-        '<span class="sc" style="color:' + M.scoreColor(c.score) + '">' + c.score + '</span>' +
-        '<button class="btn sm gray" data-open="' + i + '">看</button>' +
-        '<button class="btn sm gray" data-del="' + i + '">×</button></div>';
+        '<div class="cand-main"><span class="nm" title="' + esc(c.addr) + '">' + esc(c.title) + '</span>' +
+        '<div class="mini-dims">' + mini + '</div></div>' +
+        '<div class="cand-scores"><span class="sc" style="color:' + M.scoreColor(c.score) + '">' + c.score + '</span>' +
+        gapTxt + fitTxt + '</div>' +
+        '<button class="btn sm gray" data-open="' + v.i + '">看</button>' +
+        '<button class="btn sm gray" data-del="' + v.i + '">×</button></div>';
     }).join('');
     box.querySelectorAll('[data-del]').forEach(function (b) {
       b.onclick = function () {
@@ -549,14 +571,32 @@
     /* 按名字取分，不按下标：维度数量变过（六维→五维），老候选仍然是六维数组，
      * 用下标会把「生活保障」的分读到「环境风险」那一行去。 */
     var body = names.map(function (n) {
-      return '<tr><td>' + n + '</td>' + arr.map(function (c) {
+      var vals = arr.map(function (c) {
         var d = (c.dims || []).filter(function (x) { return x.name === n; })[0];
-        var v = d ? d.score : '—';
-        return '<td class="v" style="color:' + (typeof v === 'number' ? M.scoreColor(v) : '#8b95a3') + '">' + v + '</td>';
+        return d ? d.score : null;
+      });
+      var nums = vals.filter(function (v) { return v != null; });
+      var best = nums.length ? Math.max.apply(null, nums) : null;
+      var worst = nums.length ? Math.min.apply(null, nums) : null;
+      return '<tr><td>' + n + '</td>' + vals.map(function (v, i) {
+        if (v == null) return '<td class="v" style="color:#8b95a3">—</td>';
+        // 每一维加粗标出最优的那套；多套并列最优时同时加粗
+        var isBest = best != null && v === best && nums.length > 1 && best !== worst;
+        return '<td class="v" style="color:' + M.scoreColor(v) + '">' + (isBest ? '<b>' + v + '</b>' : v) + '</td>';
       }).join('') + '</tr>';
     }).join('');
     var total = '<tr><td><b>综合</b></td>' + arr.map(function (c) {
       return '<td class="v" style="color:' + M.scoreColor(c.score) + '"><b>' + c.score + '</b></td>';
+    }).join('') + '</tr>';
+    // 分差行：总分拉不开时，看哪一维在拉差距
+    var spreadRow = '<tr><td class="muted">各维分差（最高−最低）</td>' + names.map(function (n) {
+      var nums = arr.map(function (c) {
+        var d = (c.dims || []).filter(function (x) { return x.name === n; })[0];
+        return d ? d.score : null;
+      }).filter(function (v) { return v != null; });
+      if (nums.length < 2) return '<td class="v muted">—</td>';
+      var sp = Math.max.apply(null, nums) - Math.min.apply(null, nums);
+      return '<td class="v" style="' + (sp >= 15 ? 'color:#b42318;font-weight:700' : '') + '">' + sp.toFixed(1) + '</td>';
     }).join('') + '</tr>';
     // 适配分只有新版候选才有（老候选没存），全都没有就不显示这一行
     var hasFit = arr.some(function (c) { return c.fit; });
@@ -568,7 +608,8 @@
     var html = '<section class="card pad" style="margin-bottom:16px;border-color:#0f6b5c">' +
       '<div class="sec-t">候选横向对比 <span class="muted" style="text-transform:none;letter-spacing:0">（综合＝安全分；适配分按各自用途算）</span>' +
       '<button class="btn sm gray" id="cmpClose" style="float:right">关闭</button></div>' +
-      '<div style="overflow-x:auto"><table class="cmp-tb"><thead>' + head + '</thead><tbody>' + body + total + fitRow + '</tbody></table></div></section>';
+      '<div style="overflow-x:auto"><table class="cmp-tb"><thead>' + head + '</thead><tbody>' + body + total + spreadRow + fitRow + '</tbody></table></div>' +
+      '<p class="hint small muted" style="margin:10px 0 0">总分接近时看「各维分差」：数字越大（标红 ≥15），说明候选在这一维差距越明显，优先比较这一维。</p></section>';
     $('result').insertAdjacentHTML('afterbegin', html);
     $('cmpClose').onclick = function () { $('cmpClose').closest('section').remove(); };
   }

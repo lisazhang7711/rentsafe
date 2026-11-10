@@ -254,6 +254,12 @@ a.src:hover{color:#0f6b5c;border-bottom-style:solid}
 .cand-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #eef1f4}
 .cand-row .nm{flex:1;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cand-row .sc{font-weight:700;font-variant-numeric:tabular-nums}
+.cand-main{flex:1;min-width:0}
+.cand-main .nm{display:block}
+.mini-dims{display:flex;gap:2px;margin-top:5px;height:4px}
+.mini-dims i{flex:1;border-radius:2px;min-width:0}
+.cand-scores{display:flex;flex-direction:column;align-items:flex-end;gap:2px;white-space:nowrap}
+.cand-scores .fit-sc{font-size:11px;font-weight:600}
 .cmp-tb{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:8px}
 .cmp-tb th,.cmp-tb td{padding:8px 10px;border-bottom:1px solid #eef1f4;text-align:left}
 .cmp-tb td.v{font-weight:650;font-variant-numeric:tabular-nums}
