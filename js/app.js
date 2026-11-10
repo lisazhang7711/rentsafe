@@ -16,20 +16,98 @@
   // 「评分取的点」和「算路径的点」不是同一家机构
   var MED_NOISE = RS.model.MED_NOISE;
 
-  // 需要算真实路径的关键点位：消防算「车程」（消防车开过来），其余一律按「步行」——
-  // 警务原来也算车程（意图是警力到场），但用户反馈（2026-10-10）：派出所 240 m
-  // 却标注「驾车」很奇怪，住户视角就是走过去报警，改回步行。
-  var ROUTE_PLAN = [
-    { id: 'med',         bag: 'medical',     mode: 'walk',  label: '到医院' },
-    { id: 'pharmacy',    bag: 'pharmacy',    mode: 'walk',  label: '到药店' },
-    { id: 'supermarket', bag: 'supermarket', mode: 'walk',  label: '到超市' },
-    { id: 'market',      bag: 'market',      mode: 'walk',  label: '到菜市场' },
-    { id: 'convenience', bag: 'convenience', mode: 'walk',  label: '到便利店' },
-    { id: 'shelter',     bag: 'shelter',     mode: 'walk',  label: '到避难开阔地' },
-    { id: 'metro',       bag: 'metro',       mode: 'walk',  label: '到地铁站' },
-    { id: 'fire',        bag: 'fire',        mode: 'drive', label: '消防车到场' },
-    { id: 'police',      bag: 'police',      mode: 'walk',  label: '到警务点' }
-  ];
+  /* ---------------- 距离口径：步行路网距离 ----------------
+   * 【2026-11-10 改版】报告里所有「距离」不再是高德周边搜索返回的直线距离，
+   * 而是 AMap.Walking 算出的步行路线长度（消防站按驾车，因为要看消防车能不能开过来）。
+   *
+   * 【为什么不能对每个点位都算】一轮检索回来 400–600 个点位，逐条路径规划要几百次
+   * 请求：既超出高德 QPS 限额（会成片返回 error），也要等好几分钟。
+   *
+   * 【为什么只算最近的几个就够】计分只取「最近的那一个」（distScore 用 list[0]），
+   * 展示也只列最近 3 家。所以对每类取直线距离最近的 2–4 个算出真实路径，
+   * 算完按路网距离重新排序——这样「直线 300 m、但隔条河要走 1.2 km」的坑会被纠正：
+   * 排序一变，最近的就不再是直线最近的那家。
+   *
+   * PICK_K：每类要算路网的点位数。医院取 4（要先按名字筛掉诊所/医美，候选会往后挪），
+   * 采买与通勤类取 3（展示要列 3 家），纯风险类（垃圾站/变电站/加油站/殡葬）只关心最近 1 家。
+   */
+  var PICK_K = {
+    medical: 4, pharmacy: 3, supermarket: 3, market: 3, convenience: 3,
+    metro: 3, bus: 3, fire: 3,
+    clinic: 2, shelter: 2, police: 2, gas: 2, substation: 2, refuse: 2, funeral: 2
+  };
+  // 消防站按消防车到场算，其余一律步行——住户视角是「走过去」
+  var DRIVE_CATS = { fire: 1 };
+  /* 路网算不出来时的兜底：按城市路网绕行系数折算，并标记 est（报告里会写明是估值）。
+   * 1.3 是常见城区绕行比（直线 1 km 实际步行 1.2–1.4 km），只用于非最近点位，
+   * 最近的那几个一定有真实路网结果。 */
+  var DETOUR = 1.3;
+
+  function catLabel(id) {
+    var q = M.QUERIES.filter(function (x) { return x.id === id; })[0];
+    return q ? q.label : id;
+  }
+
+  /** 从检索结果里挑出要算路网的点位：{ jobs: [{p,id,mode,label}], bag } */
+  function routeJobs(bag) {
+    var jobs = [];
+    Object.keys(PICK_K).forEach(function (k) {
+      var list = bag[k] || [];
+      if (!list.length) return;
+      // 医院要先过名字筛选：报告里展示的是「综合医院」，算的也必须是同一家
+      var pool = (k === 'medical' ? M.medChain(bag) : list).slice(0, PICK_K[k]);
+      pool.forEach(function (p, j) {
+        jobs.push({ p: p, id: k + '#' + j, lng: p.lng, lat: p.lat,
+                    mode: DRIVE_CATS[k] ? 'drive' : 'walk', label: catLabel(k) });
+      });
+    });
+    return jobs;
+  }
+
+  /** 把路网结果写回点位：distance 换成路网距离，直线距离留在 line 上备查 */
+  function applyRoutes(bag, jobs, routes) {
+    jobs.forEach(function (j) {
+      var p = j.p, r = routes && routes[j.id];
+      if (p.line == null) p.line = p.distance;
+      if (r && r.d) {
+        p.distance = r.d;
+        p.min = r.t;
+        p.via = j.mode;
+        p.walk = true;                       // walk = 「这个距离是真的走过路网算出来的」
+        p.route = { d: r.d, t: r.t, mode: j.mode };
+      } else {
+        p.distance = Math.round(p.line * DETOUR);
+        p.walk = false;
+        p.est = true;
+      }
+    });
+    // 没参与路网计算的点位：乘绕行系数并标记估值，让整类点位在同一量纲上排序
+    Object.keys(bag).forEach(function (k) {
+      (bag[k] || []).forEach(function (p) {
+        if (p.line != null) return;
+        p.line = p.distance;
+        p.distance = Math.round(p.distance * DETOUR);
+        p.walk = false;
+        p.est = true;
+      });
+      bag[k].sort(function (a, b) { return a.distance - b.distance; });
+    });
+  }
+
+  /* opt.routes 是老接口（报告里「步行 X 约 N 分钟」读它），
+   * 现在直接从点位上取——路网结果已经挂在 POI 上了，不必再存一份 */
+  var ROUTE_ALIAS = {
+    medical: 'med', pharmacy: 'pharmacy', supermarket: 'supermarket', market: 'market',
+    convenience: 'convenience', shelter: 'shelter', metro: 'metro', fire: 'fire', police: 'police'
+  };
+  function routesFromBag(bag) {
+    var out = {};
+    Object.keys(ROUTE_ALIAS).forEach(function (k) {
+      var p = k === 'medical' ? M.pickMed(bag) : (bag[k] || [])[0];
+      if (p && p.route) out[ROUTE_ALIAS[k]] = p.route;
+    });
+    return out;
+  }
 
   /* ---------------- toast ---------------- */
   function toast(msg) {
@@ -401,32 +479,26 @@
       afterLocate();
       $('progText').textContent = '正在检索周边资源 0/' + M.QUERIES.length;
       return G.nearBatch(M.QUERIES, place.lng, place.lat, function (done, total, label) {
-        setProg(4 + (done / total) * 74);
+        setProg(4 + (done / total) * 56);
         $('progText').textContent = '正在检索：' + label + '（' + done + '/' + total + '）';
-      }).then(function (bag) {
-        // 距离补全 + 排序 + 去重
+      })      .then(function (bag) {
+        // 直线距离补全 + 排序 + 去重（只用于挑出「哪几个点位值得算路网」）
         Object.keys(bag).forEach(function (k) {
           bag[k].forEach(function (p) { if (p.distance == null) p.distance = M.haversine(place, p); });
           bag[k].sort(function (a, b) { return a.distance - b.distance; });
           bag[k] = dedupePois(bag[k]);
         });
-        // 真实路径规划：步行 / 驾车，串行节流，失败即跳过（报告会明确标注未取到）
-        var targets = [];
-        ROUTE_PLAN.forEach(function (t) {
-          var list = bag[t.bag];
-          if (!list || !list.length) return;
-          // 医院必须和报告里展示的那家是同一家（否则会出现「直线 1.9km 却步行 1.0km」
-          // 这种物理上不可能的组合），其余类别取最近的即可
-          var p = t.bag === 'medical' ? M.pickMed(bag) : list[0];
-          if (!p) return;
-          targets.push({ id: t.id, lng: p.lng, lat: p.lat, mode: t.mode, label: t.label });
-        });
-        $('progText').textContent = '正在计算实际路径 0/' + targets.length;
-        return G.routeBatch(place, targets, function (done, total, label) {
-          setProg(78 + (done / total) * 20);
-          $('progText').textContent = '正在计算实际路径：' + label + '（' + done + '/' + total + '）';
+        /* 距离口径：对每类最近的 2–4 个点位算真实步行路线（消防站算驾车），
+         * 算完把 distance 换成路网距离并按它重排——报告里的所有距离、所有分数
+         * 都建立在这个数字上，不再用直线距离折算。 */
+        var jobs = routeJobs(bag);
+        $('progText').textContent = '正在计算步行路线 0/' + jobs.length;
+        return G.routeBatch(place, jobs, function (done, total, label) {
+          setProg(62 + (done / total) * 36);
+          $('progText').textContent = '正在计算步行路线：' + label + '（' + done + '/' + total + '）';
         }).catch(function () { return {}; }).then(function (routes) {
-          return { bag: bag, place: place, routes: routes };
+          applyRoutes(bag, jobs, routes || {});
+          return { bag: bag, place: place, routes: routesFromBag(bag) };
         });
       });
     }).then(function (r) {
@@ -528,7 +600,10 @@
     try { return JSON.parse(localStorage.getItem(CAND_KEY) || '[]'); } catch (e) { return []; }
   }
 
-  /* POI 压成定长数组：键名比数据本身还占地方，一条记录能省掉六成字符 */
+  /* POI 压成定长数组：键名比数据本身还占地方，一条记录能省掉六成字符。
+   * 第 6–8 位是距离口径改版（步行路网）后加的：
+   *   [6] line 直线距离  [7] min 分钟  [8] 0=未算路网 / 1=步行 / 2=驾车
+   * 老版本存的记录只有前 6 位，解出来 walk=false，报告按「直线」标注，不会串味。 */
   function packBag(bag) {
     var out = {};
     Object.keys(bag || {}).forEach(function (k) {
@@ -536,7 +611,10 @@
       if (!list.length) return;
       out[k] = list.map(function (p) {
         return [p.name || '', p.type || '', +p.lng, +p.lat,
-                Math.round(p.distance || 0), p.address || ''];
+                Math.round(p.distance || 0), p.address || '',
+                p.line != null ? Math.round(p.line) : 0,
+                p.min != null ? p.min : (p.route && p.route.t) || 0,
+                p.walk ? (p.via === 'drive' ? 2 : 1) : 0];
       });
     });
     return out;
@@ -545,7 +623,14 @@
     var out = {};
     Object.keys(packed || {}).forEach(function (k) {
       out[k] = (packed[k] || []).map(function (a) {
-        return { name: a[0], type: a[1], lng: a[2], lat: a[3], distance: a[4], address: a[5] };
+        var w = a[8] || 0;
+        var p = {
+          name: a[0], type: a[1], lng: a[2], lat: a[3], distance: a[4], address: a[5],
+          line: a[6] || null, min: a[7] || null, walk: w > 0,
+          via: w === 2 ? 'drive' : (w === 1 ? 'walk' : null)
+        };
+        if (w > 0) p.route = { d: a[4], t: a[7] || 0, mode: w === 2 ? 'drive' : 'walk' };
+        return p;
       });
     });
     return out;
