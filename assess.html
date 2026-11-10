@@ -38,6 +38,30 @@
           租房会问租期与付款方式，购房会问产权、土地年限与周边规划——这两组题互不通用，各自占总分 20%。
         </p>
 
+        <div class="field" style="margin:0 0 12px">
+          <label>这套房你打算怎么用</label>
+          <div class="chips" id="purposeChips">
+            <button type="button" data-p="commute" class="on">上班通勤</button>
+            <button type="button" data-p="family">家庭常住</button>
+            <button type="button" data-p="invest">投资保值</button>
+            <button type="button" data-p="retire">养老 / 图安静</button>
+            <button type="button" data-p="solo">独居 / 学习</button>
+          </div>
+          <div class="hint">用途只改「综合适配分」的权重，安全分不变——这样几套房子还能横向比。通勤用最近地铁与公交距离代理，未取到你公司的真实路线。</div>
+        </div>
+
+        <div class="field" style="margin:0 0 14px">
+          <label>最在意什么（可多选，再微调权重）</label>
+          <div class="chk-grid">
+            <label class="chk"><input type="checkbox" id="needCommute"> 每天通勤</label>
+            <label class="chk"><input type="checkbox" id="needCook"> 常在家做饭</label>
+            <label class="chk"><input type="checkbox" id="needCar"> 有车</label>
+            <label class="chk"><input type="checkbox" id="needQuiet"> 怕吵 / 看重环境</label>
+            <label class="chk"><input type="checkbox" id="needElder"> 家有老人</label>
+            <label class="chk"><input type="checkbox" id="needResale"> 看重转手 / 保值</label>
+          </div>
+        </div>
+
         <div class="field ac-wrap">
           <label for="addrInput">小区名 / 详细地址</label>
           <input type="text" id="addrInput" placeholder="例如：北京市朝阳区北苑家园莲葩园" autocomplete="off">

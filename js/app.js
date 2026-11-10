@@ -9,7 +9,7 @@
 
   // homeMarker：目标位置那个可拖动的绿点，单独管理（其余点位仍放 state.markers）
   // originPlace：地理编码给出的初始定位，供「恢复初始定位」用
-  var state = { mode: 'rent', place: null, result: null, map: null, markers: [],
+  var state = { mode: 'rent', purpose: 'commute', place: null, result: null, map: null, markers: [],
                 homeMarker: null, originPlace: null, adjusted: false };
 
   // 医疗类噪声：统一用 model 里的那份，避免两边正则不一致导致
@@ -66,6 +66,28 @@
     if (mh) mh.textContent = isBuy
       ? '购房口径会问产权核验、土地剩余年限与周边规划，这一块占总分 20%；嫌恶设施的扣分也按 1.45 倍计入（它影响的是永久估值，不是阶段性体验）。'
       : '租房口径会问租期长短与房东要求的付款方式，这一块占总分 20%；这两个问题决定你能不能安稳住到期、钱会不会被套进去。';
+  }
+
+  /* ---------------- 用途与需求 ----------------
+   * 这两个字段只改「综合适配分」的权重。改它们不需要重新检索 POI，
+   * 所以直接在本地重算一次评分并重渲染报告，省掉一轮 20 多次请求。 */
+  var NEED_PAIRS = [['needCommute', 'commuteDaily'], ['needCook', 'cook'], ['needCar', 'car'],
+                    ['needQuiet', 'quiet'], ['needElder', 'elder'], ['needResale', 'resale']];
+  function currentNeeds() {
+    return NEED_PAIRS.filter(function (p) { return $(p[0]) && $(p[0]).checked; })
+      .map(function (p) { return p[1]; });
+  }
+  function refreshFit() {
+    if (!state.lastBag || !state.lastPlace) return;
+    var o = {};
+    for (var k in state.lastOpt) o[k] = state.lastOpt[k];
+    o.purpose = state.purpose;
+    o.needs = currentNeeds();
+    var res = M.evaluate(state.lastBag, o);
+    state.result = res;
+    RS.render.report($('result'), res, state.lastPlace);
+    bindResultActions();
+    toast('已按新用途重算综合适配分（安全分不变）');
   }
 
   /* ---------------- 地址联想 ---------------- */
@@ -251,6 +273,9 @@
 
     var opt = {
       mode: state.mode,
+      // 用途与需求：只影响综合适配分的权重，安全分不变
+      purpose: state.purpose,
+      needs: currentNeeds(),
       floor: $('optFloor').value === '' ? null : $('optFloor').value,
       top: $('optTop').value,
       age: $('optAge').value === '' ? null : $('optAge').value,
@@ -357,6 +382,8 @@
       opt.routes = r.routes || {};
       var res = M.evaluate(r.bag, opt);
       state.result = res; state.lastPlace = r.place;
+      // 留着原始检索结果，改用途时在本地重算，不必重新请求高德
+      state.lastBag = r.bag; state.lastOpt = opt;
       RS.render.report($('result'), res, r.place);
       bindResultActions();
       // 地图上标出关键点位
@@ -373,7 +400,8 @@
       // 报告已按当前坐标算完，微调提示条收起
       var ab = $('adjustBar'); if (ab) ab.style.display = 'none';
       try {
-        history.replaceState(null, '', '?addr=' + encodeURIComponent($('addrInput').value.trim()) + '&mode=' + state.mode);
+        history.replaceState(null, '', '?addr=' + encodeURIComponent($('addrInput').value.trim()) +
+          '&mode=' + state.mode + '&purpose=' + state.purpose);
       } catch (e) {}
     }).catch(function (err) {
       $('progWrap').classList.add('hidden');
@@ -433,6 +461,7 @@
       lng: state.lastPlace.lng, lat: state.lastPlace.lat,
       score: state.result.score, grade: state.result.grade,
       mode: state.result.mode,
+      fit: state.result.fit ? { score: state.result.fit.score, purposeName: state.result.fit.purposeName } : null,
       dims: state.result.dims.map(function (d) { return { name: d.name, score: d.score }; }),
       ts: Date.now()
     });
@@ -490,10 +519,17 @@
     var total = '<tr><td><b>综合</b></td>' + arr.map(function (c) {
       return '<td class="v" style="color:' + M.scoreColor(c.score) + '"><b>' + c.score + '</b></td>';
     }).join('') + '</tr>';
+    // 适配分只有新版候选才有（老候选没存），全都没有就不显示这一行
+    var hasFit = arr.some(function (c) { return c.fit; });
+    var fitRow = hasFit ? '<tr><td>综合适配</td>' + arr.map(function (c) {
+      if (!c.fit) return '<td class="v" style="color:#8b95a3">—</td>';
+      return '<td class="v" style="color:' + M.scoreColor(c.fit.score) + '">' + c.fit.score +
+        '<span class="muted" style="font-size:11px"> ' + esc(c.fit.purposeName) + '</span></td>';
+    }).join('') + '</tr>' : '';
     var html = '<section class="card pad" style="margin-bottom:16px;border-color:#0f6b5c">' +
-      '<div class="sec-t">候选横向对比 <span class="muted" style="text-transform:none;letter-spacing:0">（分数越高越安全）</span>' +
+      '<div class="sec-t">候选横向对比 <span class="muted" style="text-transform:none;letter-spacing:0">（综合＝安全分；适配分按各自用途算）</span>' +
       '<button class="btn sm gray" id="cmpClose" style="float:right">关闭</button></div>' +
-      '<div style="overflow-x:auto"><table class="cmp-tb"><thead>' + head + '</thead><tbody>' + body + total + '</tbody></table></div></section>';
+      '<div style="overflow-x:auto"><table class="cmp-tb"><thead>' + head + '</thead><tbody>' + body + total + fitRow + '</tbody></table></div></section>';
     $('result').insertAdjacentHTML('afterbegin', html);
     $('cmpClose').onclick = function () { $('cmpClose').closest('section').remove(); };
   }
@@ -512,6 +548,22 @@
     var bc = $('btnCompare'); if (bc) bc.onclick = compare;
     renderCand();
     setMode('rent');
+
+    // 用途胶囊：选中态 + 已出报告时本地重算适配分
+    document.querySelectorAll('#purposeChips button').forEach(function (b) {
+      b.onclick = function () {
+        state.purpose = b.dataset.p;
+        document.querySelectorAll('#purposeChips button').forEach(function (x) {
+          x.classList.toggle('on', x === b);
+        });
+        refreshFit();
+      };
+    });
+    // 需求多选同理，勾完立刻重算，不用再点一次「开始评估」
+    NEED_PAIRS.forEach(function (p) {
+      var el = $(p[0]); if (!el) return;
+      el.addEventListener('change', refreshFit);
+    });
 
     G.initMap($('miniMap'), 116.4074, 39.9042, 11).then(function (map) {
       state.map = map;
@@ -532,6 +584,14 @@
     var m = new URLSearchParams(location.search).get('mode');
     // ?mode= 只认 buy / rent，其他值一律回落 rent（否则权重表为空、总分恒为 0）
     if (m === 'buy' || m === 'rent') setMode(m);
+    // 用途参数只认预设的五个 key，其他值回落「上班通勤」
+    var fp = new URLSearchParams(location.search).get('purpose');
+    if (fp && RS.model.FIT.BASE[fp]) {
+      state.purpose = fp;
+      document.querySelectorAll('#purposeChips button').forEach(function (x) {
+        x.classList.toggle('on', x.dataset.p === fp);
+      });
+    }
     if (q) { $('addrInput').value = q; setTimeout(run, 300); }
   }
 

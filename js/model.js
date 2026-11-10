@@ -146,6 +146,86 @@
     }
   };
 
+  /* ---------------- 综合适配：按用途加权的第二层 ----------------
+   * 【为什么加这一层（2026-11-10，用户拍板采纳朋友建议）】
+   * 上一版把通勤与采买整体降级成「不计分参考」，安全口径是干净了，
+   * 但一套地铁口、消防站很远的小区，和一套消防很强、出门要走 1.5 km 的小区，
+   * 报告看不出「对谁更合适」——因为用途没进模型。
+   * 现在的结构是两层：
+   *   第一层 安全分（五维 + 模式专项）：用途变了它也不变，保证横向可比；
+   *   第二层 综合适配分：安全 / 通勤 / 采买三块按用途重新加权。
+   * 参考的行业做法：贝壳「必看好房」五维 160+ 字段并随城市动态调权，
+   * 惠居 HQI 五维品质分加钻石/黄金/白银分级，好房评选六维并输出改进建议。
+   * 共同点是「多维度 + 按需求调权 + 分级 + 可执行建议」，这里取前两项。
+   *
+   * 不加目的地导航：算一条到公司的真实路线要 geocode + route 两次请求，
+   * 每个地址多花 2 次配额，对一次评估 20 多次请求的预算不划算。
+   * 通勤改用「最近地铁 + 最近公交」代理，报告里说清这是代理口径。
+   */
+  var FIT = {
+    name: '综合适配',
+    intro: '安全分回答「出事时靠不靠得住」，这一层回答「按你的用途合不合适」。安全、通勤、采买三块按用途重新加权；安全分本身不随用途变化，方便几套房子横向比。通勤用最近地铁与公交的距离代理，没有取到你公司的真实路线。',
+    BASE: {
+      commute: { name: '上班通勤自住', safe: .40, go: .45, buy: .15, note: '早出晚归，地铁与公交通勤的时间成本最先被感知。' },
+      family:  { name: '家庭常住',     safe: .60, go: .20, buy: .20, note: '家里有老人小孩，应急医疗与消防的权重要压过通勤。' },
+      invest:  { name: '投资保值',     safe: .35, go: .45, buy: .20, note: '转手时买家先问离地铁多远，通勤与配套决定流动性。' },
+      retire:  { name: '养老 / 图安静', safe: .62, go: .13, buy: .25, note: '日常活动半径小，医疗距离与环境安静比通勤重要。' },
+      solo:    { name: '独居 / 学习',   safe: .45, go: .30, buy: .25, note: '一个人住，采买与通勤的便利度权重更高。' }
+    },
+    NEEDS: {
+      commuteDaily: { name: '每天通勤', go: .10, safe: -.05, buy: -.05 },
+      cook:         { name: '常在家做饭', buy: .08, safe: -.04, go: -.04 },
+      car:          { name: '有车', go: -.08, buy: .04, safe: .04 },
+      quiet:        { name: '怕吵 / 看重环境', safe: .06, go: -.03, buy: -.03 },
+      elder:        { name: '家有老人', safe: .08, go: -.04, buy: -.04 },
+      resale:       { name: '看重转手 / 保值', go: .06, buy: .02, safe: -.08 }
+    }
+  };
+
+  /** 三块分数 -> 按用途与需求加权；返回适配分与逐块明细 */
+  function buildFit(safeScore, goScore, buyScore, opt) {
+    var key = FIT.BASE[opt.purpose] ? opt.purpose : 'commute';
+    var base = FIT.BASE[key];
+    var w = { safe: base.safe, go: base.go, buy: base.buy };
+    var used = [];
+    (opt.needs || []).forEach(function (n) {
+      var d = FIT.NEEDS[n];
+      if (!d) return;
+      used.push(d.name);
+      w.safe += d.safe || 0; w.go += d.go || 0; w.buy += d.buy || 0;
+    });
+    // 需求叠加可能把某一项压到 0 以下，先保底再归一化，避免某一层被完全抹掉
+    var sum = 0;
+    ['safe', 'go', 'buy'].forEach(function (k) { w[k] = Math.max(.08, w[k]); sum += w[k]; });
+    ['safe', 'go', 'buy'].forEach(function (k) { w[k] = w[k] / sum; });
+
+    var score = round(clamp(w.safe * safeScore + w.go * goScore + w.buy * buyScore, 0, 100));
+    var blocks = [
+      { id: 'safe', name: '安全（五维 + 专项）', score: round(safeScore), weight: Math.round(w.safe * 100) },
+      { id: 'go',   name: '通勤（地铁 / 公交）',  score: round(goScore),   weight: Math.round(w.go * 100) },
+      { id: 'buy',  name: '采买（超市 / 菜场 / 便利店）', score: round(buyScore), weight: Math.round(w.buy * 100) }
+    ];
+    var weakest = blocks.slice().sort(function (a, b) { return a.score - b.score; })[0];
+    var delta = round(score - safeScore);
+
+    var verdict;
+    if (score >= 85) verdict = '按「' + base.name + '」看，这套很匹配，短板也在可接受范围。';
+    else if (score >= 70) verdict = '按「' + base.name + '」看基本合适，' + weakest.name + '是最该去现场确认的一块。';
+    else if (score >= 55) verdict = '按「' + base.name + '」看有明显不匹配的地方，' + weakest.name + '只有 ' + weakest.score + ' 分。';
+    else verdict = '按「' + base.name + '」看不太对得上，' + weakest.name + '拖得很明显，除非价格有优势否则不必花时间。';
+
+    /* 适配分与安全分差得远的时候必须点出来，否则用户容易把「配套好」误读成「房子安全」 */
+    if (delta >= 6) verdict += ' 注意：适配分比安全分高 ' + delta + ' 分，高出的部分来自通勤与采买，安全条件没有变好。';
+    else if (delta <= -6) verdict += ' 注意：适配分比安全分低 ' + (-delta) + ' 分，配套拖累了整体，安全条件本身没有那么差。';
+
+    return {
+      purpose: key, purposeName: base.name, purposeNote: base.note,
+      needs: used, weights: { safe: Math.round(w.safe * 100), go: Math.round(w.go * 100), buy: Math.round(w.buy * 100) },
+      score: score, grade: score >= 85 ? 'A' : score >= 70 ? 'B' : score >= 55 ? 'C' : 'D',
+      delta: delta, verdict: verdict, weakest: weakest.name, blocks: blocks
+    };
+  }
+
   /* 返回 {score, items:[{t,s,cut}]}；mode 已归一化 */
   function buildSpec(mode, opt, poiBag) {
     var items = [], base = 100;
@@ -545,6 +625,22 @@
       '加油站/加气站：' + (nearest(poiBag.gas) ? nearest(poiBag.gas).name + '（' + fmtDist(nearest(poiBag.gas).distance) + '）' : '1.5 km 内未检索到')
     ];
 
+    /* —— 通勤分与采买分（供综合适配层使用）——
+     * 这两块原来合在「生活配套便利度」里，权重是地铁 .38 / 公交 .22 / 采买 .30 / 加油 .10。
+     * 拆开是因为适配层要按用途单独调权：通勤族和养老家庭对这两块的看重程度差得远，
+     * 合成一个数之后就没法分别加权了。加油并入采买（有车的人才会用到）。
+     * 阈值沿用原来的分级，不新增调参点。 */
+    var sGo = clamp(
+      distScore(poiBag.metro, [[600, 100], [1200, 88], [2000, 74]], 45) * .60 +
+      distScore(poiBag.bus, [[200, 100], [400, 88], [700, 76]], 52) * .40, 0, 100);
+    var sBuy = clamp(
+      distScore(poiBag.supermarket, [[400, 100], [800, 88], [1500, 76]], 48) * .50 +
+      distScore(poiBag.market, [[500, 100], [1000, 88], [1800, 75]], 48) * .30 +
+      distScore(poiBag.convenience, [[200, 100], [500, 88], [1000, 76]], 48) * .20, 0, 100);
+    // 无电梯且住 4 层以上，日常采买搬上楼的成本要算进去
+    if (opt.elevator === 'none' && h.floor >= 4) sBuy -= 6;
+    sGo = clamp(sGo, 0, 100); sBuy = clamp(sBuy, 0, 100);
+
     /* —— 环境风险（扣分制）——
      * ENV_MODE_MUL：同样的嫌恶设施，买房口径扣得更狠。
      * 注意只对「扣分」生效，不会因为环境干净而给买房额外加分。
@@ -610,6 +706,9 @@
     var baseScore = 0;
     for (var k in W) baseScore += S[k] * W[k];
     var total = round(clamp(baseScore * (1 - SPEC_W) + spec.score * SPEC_W, 0, 100));
+
+    /* 第二层：按用途加权的综合适配（安全分不变，另算一个适配分） */
+    var fit = buildFit(total, sGo, sBuy, opt);
 
     var grade = total >= 85 ? 'A' : total >= 70 ? 'B' : total >= 55 ? 'C' : 'D';
     var GRADE_TXT = {
@@ -723,7 +822,10 @@
     note('本次口径为「' + (mode === 'rent' ? '租房' : '购房') + '」：' + specName + '这一块占总分 ' +
       Math.round(SPEC_W * 100) + '%，是另一口径没有的评估项。');
     if (mode === 'buy') note('购房口径：环境嫌恶设施按 ' + ENV_MODE_MUL.buy + ' 倍计扣分（对租客是阶段性损失，对业主是永久估值折损）');
-    note('生活配套（地铁 / 公交 / 采买 / 加油）只作参考，不计入综合安全分：通勤与采买决定住着累不累，属配套设施而非安全条件。');
+    note('生活配套（地铁 / 公交 / 采买 / 加油）不计入综合安全分：通勤与采买决定住着累不累，属配套设施而非安全条件。');
+    note('综合适配分是第二层：安全 ' + fit.weights.safe + '%、通勤 ' + fit.weights.go + '%、采买 ' + fit.weights.buy +
+      '%（用途「' + fit.purposeName + '」' + (fit.needs.length ? '，另计入：' + fit.needs.join('、') : '') +
+      '）。安全分不随用途变化，改动用途只会改适配分。');
     note('环境风险按影响确定性分档扣分：垃圾站 16 分（异味、蚊蝇、清运车噪声，长期且确定）；内涝 10 分；加油站与变电站各 5 分（按低概率事故 + 长期噪声计，不按「会爆炸」计——近 20 年国内加油站事故全部源于施工检修违规或泄漏，变电站事故后果主要是短时停电，未见住宅结构损伤或居民伤亡）。');
 
     /* —— 清单 —— */
@@ -742,6 +844,8 @@
       mode: mode, score: total, grade: grade, gradeTxt: GRADE_TXT[grade],
       dims: arr, highlights: highlights, gaps: gaps, risks: risks,
       envHits: envHits, power72: p72, visit: visit, weight: W, env: opt, notes: notes,
+      /* 第二层：按用途加权的综合适配（安全分不受用途影响） */
+      fit: fit,
       spec: {
         name: specName, intro: SPEC[mode].intro,
         score: round(spec.score), items: spec.items,
@@ -906,7 +1010,7 @@
 
   RS.model = {
     QUERIES: QUERIES, DIMS: DIMS, WEIGHT: WEIGHT, RADIUS_TXT: RADIUS_TXT,
-    evaluate: evaluate, fmtDist: fmtDist, haversine: haversine,
+    FIT: FIT, evaluate: evaluate, fmtDist: fmtDist, haversine: haversine,
     routeTxt: routeTxt, distTxt: distTxt, resolveHeight: resolveHeight,
     MED_NOISE: MED_NOISE, pickMed: pickMed, medChain: medChain,
     scoreColor: scoreColor, clamp: clamp

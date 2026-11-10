@@ -238,24 +238,53 @@
         '</section>'
       : '';
 
-    /* 生活配套：通勤 / 采买 / 加油。属配套设施而非安全条件，
-     * 2026-10-11 从评分维度降级为参考区块——分数照给，但不参与加权。 */
+    /* 生活配套：只列距离明细。
+     * 原来这里有一个「便利度」参考分，加进综合适配层之后就不给了——
+     * 通勤与采买两个分已经在适配层里按用途加权，再放一个不分用途的总分会打架。 */
     var amenityHtml = res.amenity
       ? '<section class="card pad" style="margin-bottom:16px">' +
-          '<div class="sec-t">生活配套' +
-            '<span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500;font-size:12px">　参考项，不计入综合安全分</span>' +
+          '<div class="sec-t">生活配套 · 距离明细' +
+            '<span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500;font-size:12px">　不计入安全分</span>' +
           '</div>' +
-          '<div style="display:flex;align-items:center;gap:12px;margin:2px 0 10px">' +
-            '<div style="font-size:26px;font-weight:800;line-height:1;color:' + M.scoreColor(res.amenity.score) + '">' +
-              res.amenity.score + '</div>' +
-            '<div class="bar" style="flex:1;margin:0"><i style="width:' + res.amenity.score +
-              '%;background:' + M.scoreColor(res.amenity.score) + '"></i></div>' +
-            '<div class="small muted" style="white-space:nowrap">便利度参考</div>' +
-          '</div>' +
-          '<p class="hint small muted" style="margin:0 0 10px">' + esc(res.amenity.intro) + '</p>' +
+          '<p class="hint small muted" style="margin:-2px 0 10px">' +
+            '通勤与采买的加权结果在上面的「综合适配」里；这里保留原始距离，方便你按自己的习惯核对。' +
+          '</p>' +
           '<ul class="ev" style="margin:0">' +
             res.amenity.evidences.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') +
           '</ul>' +
+        '</section>'
+      : '';
+
+    /* 综合适配：第二层，按用途给安全 / 通勤 / 采买重新加权。
+     * 放在结论下面第一块，是因为它直接回答「这套房适不适合我」，
+     * 而五维安全结构回答的是「它本身靠不靠得住」——两个问题分开摆。 */
+    var fitHtml = res.fit
+      ? '<section class="card pad" style="margin-bottom:16px">' +
+          '<div class="sec-t">综合适配' +
+            '<span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500;font-size:12px">　用途：' +
+            esc(res.fit.purposeName) + '</span>' +
+          '</div>' +
+          '<div style="display:flex;align-items:center;gap:12px;margin:2px 0 12px">' +
+            '<div style="font-size:32px;font-weight:800;line-height:1;color:' + M.scoreColor(res.fit.score) + '">' +
+              res.fit.score + '</div>' +
+            '<div class="bar" style="flex:1;margin:0"><i style="width:' + res.fit.score +
+              '%;background:' + M.scoreColor(res.fit.score) + '"></i></div>' +
+            '<div class="small muted" style="white-space:nowrap">比安全分 ' +
+              (res.fit.delta > 0 ? '+' : '') + res.fit.delta + '</div>' +
+          '</div>' +
+          res.fit.blocks.map(function (b) {
+            return '<div style="display:flex;align-items:center;gap:10px;margin:6px 0">' +
+              '<span class="small" style="flex:0 0 42%">' + esc(b.name) +
+                '<span class="muted" style="margin-left:6px">权重 ' + b.weight + '%</span></span>' +
+              '<div class="bar" style="flex:1;margin:0"><i style="width:' + b.score +
+                '%;background:' + M.scoreColor(b.score) + '"></i></div>' +
+              '<b class="small" style="color:' + M.scoreColor(b.score) + ';flex:0 0 34px;text-align:right">' +
+                b.score + '</b>' +
+            '</div>';
+          }).join('') +
+          '<div class="alert ' + (res.fit.score >= 70 ? 'ok' : 'warn') + '">' + esc(res.fit.verdict) + '</div>' +
+          '<p class="hint small muted" style="margin:10px 0 0">' + esc(RS.model.FIT.intro) +
+            '　' + esc(res.fit.purposeNote) + '</p>' +
         '</section>'
       : '';
 
@@ -284,6 +313,9 @@
           '</div>' +
         '</div>' +
       '</section>' +
+
+      /* 综合适配：按用途加权的第二层 */
+      fitHtml +
 
       /* 模式专项（租房=租约稳定 / 购房=资产稳健）—— 只有当前口径才有 */
       specHtml +
@@ -366,6 +398,14 @@
     L.push('【' + place.title + '】安全评估报告');
     L.push('地址：' + place.addr + '　口径：' + (res.mode === 'rent' ? '租房' : '购房'));
     L.push('综合得分：' + res.score + ' / 100（' + res.grade + ' 级）— ' + res.gradeTxt);
+    if (res.fit) {
+      L.push('综合适配：' + res.fit.score + ' / 100（用途「' + res.fit.purposeName + '」，比安全分 ' +
+        (res.fit.delta > 0 ? '+' : '') + res.fit.delta + '）');
+      res.fit.blocks.forEach(function (b) {
+        L.push('　· ' + b.name + '：' + b.score + '（权重 ' + b.weight + '%）');
+      });
+      L.push('　· ' + res.fit.verdict);
+    }
     L.push('');
     L.push('— 五维得分 —');
     res.dims.forEach(function (d) { L.push(d.name + '：' + d.score + '（占总分 ' + d.weight + '%）'); });
@@ -377,8 +417,7 @@
     }
     if (res.amenity) {
       L.push('');
-      L.push('— 生活配套（参考项，不计入综合安全分）—');
-      L.push('便利度：' + res.amenity.score + ' / 100');
+      L.push('— 生活配套（距离明细，不计入安全分）—');
       res.amenity.evidences.forEach(function (e) { L.push('· ' + e); });
     }
     L.push('');
