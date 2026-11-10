@@ -78,6 +78,9 @@
       .map(function (p) { return p[1]; });
   }
   function refreshFit() {
+    /* 候选列表先跟着重排：几套候选都按新的用途重算，
+     * 这样「换个用途看看」不用逐个点开，列表上的名次和分数当场就变。 */
+    renderCand();
     if (!state.lastBag || !state.lastPlace) return;
     var o = {};
     for (var k in state.lastOpt) o[k] = state.lastOpt[k];
@@ -89,9 +92,12 @@
     o.parking = $('optParking') ? $('optParking').value : 'unk';
     var res = M.evaluate(state.lastBag, o);
     state.result = res;
+    state.lastOpt = o;
     RS.render.report($('result'), res, state.lastPlace);
     bindResultActions();
-    toast('已按新用途重算综合适配分（安全分不变）');
+    updateUrl();
+    toast('已按「' + purposeName() + '」重算：适配分 ' + (res.fit ? res.fit.score : res.score) +
+      '，安全分 ' + res.score + ' 不变');
   }
 
   /* ---------------- 地址联想 ---------------- */
@@ -276,19 +282,10 @@
     $('progBar').style.width = pct + '%';
   }
 
-  function run() {
-    var kw = $('addrInput').value.trim();
-    if (!kw) return toast('先输入小区名或地址');
-    // 防重入：评估进行中再按回车 / 点候选 / 点重跑，不能让第二轮把进度条拽回起点
-    if (state.running) return toast('正在评估中，这一轮跑完再试');
-    state.running = true;
-    $('btnRun').disabled = true;
-    $('progWrap').classList.remove('hidden');
-    setProg(4, true);
-    $('progText').textContent = '正在定位…';
-    $('result').innerHTML = '<div class="card empty-state"><div class="big">◐</div>正在检索周边应急与生活资源…</div>';
-
-    var opt = {
+  /* 表单 -> 评估入参。抽出来是因为「点候选直接出报告」也要同一份口径：
+   * 两处各写一遍，迟早会漏字段，同一套房算出两个分数。 */
+  function readOpt() {
+    return {
       mode: state.mode,
       // 用途与需求：只影响综合适配分的权重，安全分不变
       purpose: state.purpose,
@@ -325,6 +322,42 @@
       tenure: $('optTenure') ? $('optTenure').value : 'unk',
       plan: $('optPlan') ? $('optPlan').value : 'unk'
     };
+  }
+
+  /* 地址栏同步：刷新/分享后能回到同一个地址、口径与用途 */
+  function updateUrl() {
+    try {
+      history.replaceState(null, '', '?addr=' + encodeURIComponent($('addrInput').value.trim()) +
+        '&mode=' + state.mode + '&purpose=' + state.purpose);
+    } catch (e) {}
+  }
+
+  var MARK_COLORS = { med: '#b42318', fire: '#c2410c', shelter: '#1a7f37',
+                      supermarket: '#0f6b5c', metro: '#1d4ed8', police: '#4338ca' };
+  /* 地图点位：跑完检索要画，点候选直接出报告也要画，所以抽出来 */
+  function drawResultMarkers(res, place) {
+    if (!state.map) return;
+    clearMarkers();
+    addHomeMarker(place.lng, place.lat, place.title);
+    Object.keys(MARK_COLORS).forEach(function (k) {
+      var f = res.facts[k];
+      if (f) addMarker(f.lng, f.lat, f.name, MARK_COLORS[k]);
+    });
+  }
+
+  function run() {
+    var kw = $('addrInput').value.trim();
+    if (!kw) return toast('先输入小区名或地址');
+    // 防重入：评估进行中再按回车 / 点候选 / 点重跑，不能让第二轮把进度条拽回起点
+    if (state.running) return toast('正在评估中，这一轮跑完再试');
+    state.running = true;
+    $('btnRun').disabled = true;
+    $('progWrap').classList.remove('hidden');
+    setProg(4, true);
+    $('progText').textContent = '正在定位…';
+    $('result').innerHTML = '<div class="card empty-state"><div class="big">◐</div>正在检索周边应急与生活资源…</div>';
+
+    var opt = readOpt();
 
     // 地址去重拼接，避免出现「北京市朝阳区北京市朝阳区…」
     function composeAddr(g) {
@@ -407,23 +440,13 @@
       RS.render.report($('result'), res, r.place);
       bindResultActions();
       // 地图上标出关键点位
-      if (state.map) {
-        clearMarkers();
-        addHomeMarker(r.place.lng, r.place.lat, r.place.title);
-        var colors = { med: '#b42318', fire: '#c2410c', shelter: '#1a7f37', supermarket: '#0f6b5c', metro: '#1d4ed8', police: '#4338ca' };
-        ['med', 'fire', 'shelter', 'supermarket', 'metro', 'police'].forEach(function (k) {
-          var f = res.facts[k]; if (f) addMarker(f.lng, f.lat, f.name, colors[k] || '#666');
-        });
-      }
+      drawResultMarkers(res, r.place);
       $('progWrap').classList.add('hidden');
       $('btnRun').disabled = false;
       state.running = false;
       // 报告已按当前坐标算完，微调提示条收起
       var ab = $('adjustBar'); if (ab) ab.style.display = 'none';
-      try {
-        history.replaceState(null, '', '?addr=' + encodeURIComponent($('addrInput').value.trim()) +
-          '&mode=' + state.mode + '&purpose=' + state.purpose);
-      } catch (e) {}
+      updateUrl();
     }).catch(function (err) {
       $('progWrap').classList.add('hidden');
       $('btnRun').disabled = false;
@@ -485,131 +508,305 @@
       }
     };
     var bs = $('btn-save');
-    if (bs) bs.onclick = function () { saveCand(); renderCand(); };
+    if (bs) bs.onclick = function () { saveCand(); };
   }
 
-  /* ---------------- 候选与对比 ---------------- */
+  /* ---------------- 候选与对比 ----------------
+   * 【2026-11-10 改版：候选带「周边明细快照」】
+   * 老版本只存分数，所以点「看」只能把整轮检索（20 多次请求、10–20 秒）重跑一遍；
+   * 更麻烦的是同一地点换个用途也得再跑一轮，用途对分数的影响根本看不出来。
+   * 现在保存时把 POI 检索结果 + 路径 + 补充信息一起压进 localStorage：
+   *   ① 点「看」= 本地重算，零请求、瞬出；
+   *   ② 换用途时所有候选就地按新权重重排，「同一地点不同用途分数不同」直接看得见。
+   * 代价是存储占用：按类别截断（密度加成最高档是便利店 60 家，留到 120 够用），
+   * 写满配额时从最旧的候选开始丢明细降级（lite），不让保存直接失败。 */
+  var CAND_KEY = 'rentsafe.cand';
+  var CAND_MAX = 8;
+  var BAG_CAP = 120;
+
   function cands() {
-    try { return JSON.parse(localStorage.getItem('rentsafe.cand') || '[]'); } catch (e) { return []; }
+    try { return JSON.parse(localStorage.getItem(CAND_KEY) || '[]'); } catch (e) { return []; }
   }
+
+  /* POI 压成定长数组：键名比数据本身还占地方，一条记录能省掉六成字符 */
+  function packBag(bag) {
+    var out = {};
+    Object.keys(bag || {}).forEach(function (k) {
+      var list = (bag[k] || []).slice(0, BAG_CAP);
+      if (!list.length) return;
+      out[k] = list.map(function (p) {
+        return [p.name || '', p.type || '', +p.lng, +p.lat,
+                Math.round(p.distance || 0), p.address || ''];
+      });
+    });
+    return out;
+  }
+  function unpackBag(packed) {
+    var out = {};
+    Object.keys(packed || {}).forEach(function (k) {
+      out[k] = (packed[k] || []).map(function (a) {
+        return { name: a[0], type: a[1], lng: a[2], lat: a[3], distance: a[4], address: a[5] };
+      });
+    });
+    return out;
+  }
+
+  /** 写入候选；配额不够时从最旧的一条开始丢明细，直到写得进 */
+  function persistCands(arr) {
+    for (var i = 0; i < 12; i++) {
+      try { localStorage.setItem(CAND_KEY, JSON.stringify(arr)); return true; } catch (e) {}
+      var victim = null;
+      for (var j = arr.length - 1; j >= 0; j--) if (arr[j].bag) { victim = arr[j]; break; }
+      if (!victim) return false;
+      victim.bag = null; victim.routes = null; victim.lite = true;
+    }
+    return false;
+  }
+
+  /* 候选的评估入参：房屋信息用保存时的，用途与「最在意」用当前界面上的——
+   * 这样几套候选永远在同一把尺子下比较。 */
+  function candOpt(c) {
+    var o = {}, base = c.opt || {};
+    for (var k in base) o[k] = base[k];
+    o.mode = c.mode || base.mode || 'rent';
+    o.purpose = state.purpose;
+    o.needs = currentNeeds();
+    o.routes = c.routes || {};
+    return o;
+  }
+
+  /* 快照重算的结果缓存：换用途时同一候选只算一次，来回切不会卡 */
+  var candCache = {};
+  function candRes(c) {
+    if (!c.bag) return null;
+    var key = [c.ts || 0, c.lng, c.lat, c.mode, state.purpose, currentNeeds().join(',')].join('|');
+    if (candCache[key]) return candCache[key];
+    var res = M.evaluate(unpackBag(c.bag), candOpt(c));
+    candCache[key] = res;
+    return res;
+  }
+
+  /** 候选的展示数据：能按快照重算就用重算结果，旧记录退回保存时的分数 */
+  function candRows() {
+    return cands().map(function (c, i) {
+      var res = candRes(c);
+      var safe = res ? res.score : (c.score != null ? c.score : 0);
+      var fit = res && res.fit ? res.fit.score : (c.fit ? c.fit.score : null);
+      var grade = res && res.fit ? res.fit.grade : (c.fit && c.fit.grade ? c.fit.grade : c.grade);
+      return {
+        i: i, c: c, res: res, safe: safe, fit: fit, grade: grade,
+        dims: res ? res.dims : (c.dims || []),
+        main: fit != null ? fit : safe, live: !!res
+      };
+    });
+  }
+
+  function purposeName() {
+    return (M.FIT.BASE[state.purpose] || {}).name || state.purpose;
+  }
+
   function saveCand() {
     if (!state.result || !state.lastPlace) return;
-    var arr = cands();
+    var p = state.lastPlace, r = state.result;
     // 去重：同名且坐标基本一致（<150 m）的算同一个小区，覆盖旧记录，不重复占位
-    var p = state.lastPlace;
-    arr = arr.filter(function (c) {
+    var arr = cands().filter(function (c) {
       var sameSpot = c.lng != null && p.lng != null &&
         Math.abs(c.lng - p.lng) < .0015 && Math.abs(c.lat - p.lat) < .0015;
       return !(c.title === p.title || sameSpot);
     });
     arr.unshift({
-      title: p.title, addr: p.addr,
-      lng: p.lng, lat: p.lat,
-      score: state.result.score, grade: state.result.grade,
-      mode: state.result.mode,
-      fit: state.result.fit ? { score: state.result.fit.score, purposeName: state.result.fit.purposeName } : null,
-      dims: state.result.dims.map(function (d) { return { name: d.name, score: d.score }; }),
-      ts: Date.now()
+      v: 2,
+      title: p.title, addr: p.addr, lng: p.lng, lat: p.lat,
+      score: r.score, grade: r.grade, mode: r.mode,
+      fit: r.fit ? { score: r.fit.score, grade: r.fit.grade, purposeName: r.fit.purposeName } : null,
+      dims: r.dims.map(function (d) { return { name: d.name, score: d.score }; }),
+      ts: Date.now(),
+      /* 这三样是「零请求直出」的本钱：有它们，点「看」只要本地算一遍 */
+      opt: stripOpt(state.lastOpt),
+      routes: (state.lastOpt && state.lastOpt.routes) || null,
+      bag: state.lastBag ? packBag(state.lastBag) : null
     });
-    arr = arr.slice(0, 8);
-    try { localStorage.setItem('rentsafe.cand', JSON.stringify(arr)); } catch (e) {}
-    toast('已保存为候选，可开对比');
+    arr = arr.slice(0, CAND_MAX);
+    var ok = persistCands(arr);
+    candCache = {};
+    renderCand();
+    toast(ok ? '已保存为候选（周边明细一起存了，点「看」直接出结果）'
+             : '已保存，但浏览器存储空间不够，这次明细没存下——点「看」会重新检索');
   }
+  /* 用途与「最在意」不进快照：它们是当前界面的东西，点「看」时按现选的重算 */
+  function stripOpt(o) {
+    var out = {};
+    for (var k in (o || {})) {
+      if (k === 'routes' || k === 'purpose' || k === 'needs') continue;
+      out[k] = o[k];
+    }
+    return out;
+  }
+
+  /* 表单字段映射：点「看」时把保存时的房屋信息填回左侧表单，
+   * 否则报告按旧参数算、表单是新的，用户再点一次「开始评估」就会变分数 */
+  var OPT_SELECT = {
+    floor: 'optFloor', top: 'optTop', age: 'optAge', elevator: 'optElevator',
+    door: 'optDoor', camera: 'optCamera', gas: 'optGas', hydrant: 'optHydrant',
+    stair2: 'optStair2', parking: 'optParking',
+    lease: 'optLease', pay: 'optPay', title: 'optTitle', tenure: 'optTenure', plan: 'optPlan'
+  };
+  var OPT_CHECK = {
+    share: 'optShare', partition: 'optPartition', basement: 'optBasement',
+    topfloor: 'optTopFloor', ebike: 'optEbike', clutter: 'optClutter',
+    burglarbar: 'optBurglarBar', flood: 'optFlood', elderly: 'optElderly',
+    toddler: 'optToddler', disabled: 'optDisabled', device: 'optDevice',
+    pet: 'optPet', street: 'optStreet'
+  };
+  function applyOpt(o) {
+    if (!o) return;
+    Object.keys(OPT_SELECT).forEach(function (k) {
+      var el = $(OPT_SELECT[k]);
+      if (!el || o[k] == null || o[k] === '') return;
+      var v = String(o[k]);
+      el.value = v;
+      if (el.value !== v) el.value = '';
+    });
+    Object.keys(OPT_CHECK).forEach(function (k) {
+      var el = $(OPT_CHECK[k]);
+      if (el) el.checked = !!o[k];
+    });
+  }
+
+  /* 点「看」：直接用快照在本地出报告，不发起任何高德请求 */
+  function openCand(i) {
+    var c = cands()[i];
+    if (!c) return;
+    $('addrInput').value = c.title;
+    state.place = { title: c.title, addr: c.addr, lng: c.lng, lat: c.lat };
+    afterLocate();
+    if (!c.bag) {
+      toast('这个候选是旧版本存的、没有周边明细，只能重新检索一次');
+      return run();
+    }
+    if (c.mode) setMode(c.mode);
+    applyOpt(c.opt);
+    var place = state.place;
+    var res = candRes(c);
+    state.result = res;
+    state.lastPlace = place;
+    state.lastBag = unpackBag(c.bag);
+    state.lastOpt = candOpt(c);
+    RS.render.report($('result'), res, place);
+    bindResultActions();
+    drawResultMarkers(res, place);
+    var ab = $('adjustBar'); if (ab) ab.style.display = 'none';
+    updateUrl();
+    toast('已按「' + purposeName() + '」直接出结果（用保存时的周边明细，未重新检索）');
+  }
+
   function renderCand() {
-    var arr = cands(), box = $('candList');
+    var arr = candRows(), box = $('candList');
     if (!box) return;
-    if (!arr.length) { box.innerHTML = '<p class="small muted">还没有候选。评估完点「保存为候选」，就能横向对比两套房子。</p>'; return; }
-    // 按安全分从高到低展示；data-* 里存的是原始下标，删除/打开不受排序影响
-    var view = arr.map(function (c, i) { return { c: c, i: i }; })
-      .sort(function (a, b) { return b.c.score - a.c.score; });
-    var top = view[0].c.score;
-    box.innerHTML = view.map(function (v) {
+    var cb = $('btnCompare');
+    if (!arr.length) {
+      box.innerHTML = '<p class="small muted">还没有候选。评估完点「保存为候选」，就能横向对比两套房子。</p>';
+      if (cb) cb.style.display = 'none';
+      return;
+    }
+    // 按当前用途的适配分从高到低排；data-* 里存原始下标，删除/打开不受排序影响
+    var view = arr.slice().sort(function (a, b) { return b.main - a.main; });
+    var top = view[0].main;
+    var head = '<p class="small muted" style="margin:0 0 8px">按「' + esc(purposeName()) +
+      '」排序：大字是适配分（换用途就变），小字是安全分（不随用途变）。</p>';
+    box.innerHTML = head + view.map(function (v) {
       var c = v.c;
-      // 五维迷你条：总分接近时差异都在这里，一眼看出两套房差在哪一维
-      var mini = (c.dims || []).map(function (d) {
+      // 五维迷你条：安全分接近时差异都在这里，一眼看出两套房差在哪一维
+      var mini = (v.dims || []).map(function (d) {
         return '<i style="background:' + M.scoreColor(d.score) + '" title="' + esc(d.name) + ' ' + d.score + '"></i>';
       }).join('');
-      var gapTxt = c.score < top ? '<span class="muted" style="font-size:11px;font-weight:500"> −' +
-        (top - c.score).toFixed(1) + '</span>' : '';
-      var fitTxt = c.fit ? '<span class="fit-sc" style="color:' + M.scoreColor(c.fit.score) + '">适配 ' +
-        c.fit.score + '</span>' : '';
-      return '<div class="cand-row"><span class="grade ' + c.grade + '">' + c.grade + '</span>' +
-        '<div class="cand-main"><span class="nm" title="' + esc(c.addr) + '">' + esc(c.title) + '</span>' +
+      var gap = v.main < top
+        ? '<span class="muted" style="font-size:11px;font-weight:500"> −' + (top - v.main).toFixed(1) + '</span>'
+        : '';
+      return '<div class="cand-row"><span class="grade ' + v.grade + '">' + v.grade + '</span>' +
+        '<div class="cand-main"><span class="nm" title="' + esc(c.addr) + '">' + esc(c.title) +
+          (v.live ? '' : ' <span class="muted" style="font-weight:500;font-size:11px">旧记录</span>') + '</span>' +
         '<div class="mini-dims">' + mini + '</div></div>' +
-        '<div class="cand-scores"><span class="sc" style="color:' + M.scoreColor(c.score) + '">' + c.score + '</span>' +
-        gapTxt + fitTxt + '</div>' +
+        '<div class="cand-scores"><span class="sc" style="color:' + M.scoreColor(v.main) + '">' +
+          v.main + gap + '</span>' +
+          '<span class="fit-sc muted" style="font-weight:500">安全 ' + v.safe + '</span></div>' +
         '<button class="btn sm gray" data-open="' + v.i + '">看</button>' +
         '<button class="btn sm gray" data-del="' + v.i + '">×</button></div>';
     }).join('');
     box.querySelectorAll('[data-del]').forEach(function (b) {
       b.onclick = function () {
         var a = cands(); a.splice(+b.dataset.del, 1);
-        localStorage.setItem('rentsafe.cand', JSON.stringify(a)); renderCand();
+        localStorage.setItem(CAND_KEY, JSON.stringify(a)); candCache = {}; renderCand();
       };
     });
     box.querySelectorAll('[data-open]').forEach(function (b) {
-      b.onclick = function () {
-        var c = cands()[+b.dataset.open];
-        $('addrInput').value = c.title;
-        // 老候选可能没有存坐标（历史 bug），这里能做的最多是别把 null 当成「已定位」
-        state.place = { title: c.title, addr: c.addr, lng: c.lng || null, lat: c.lat || null };
-        run();
-      };
+      b.onclick = function () { openCand(+b.dataset.open); };
     });
-    var cb = $('btnCompare');
     if (cb) cb.style.display = arr.length >= 2 ? '' : 'none';
   }
 
   function compare() {
     // 与保存上限一致：最多同时对比 8 套（原来只取 3 套，与首页「最多保存 8 套」对不上）
-    var arr = cands().slice(0, 8);
-    if (arr.length < 2) return toast('至少保存两个候选');
+    var rows = candRows().slice(0, CAND_MAX);
+    if (rows.length < 2) return toast('至少保存两个候选');
     var names = M.DIMS.map(function (d) { return d.name; });
-    var head = '<tr><th>维度</th>' + arr.map(function (c) {
-      return '<th>' + esc(c.title.length > 10 ? c.title.slice(0, 10) + '…' : c.title) + '</th>';
+    var head = '<tr><th>维度</th>' + rows.map(function (v) {
+      var t = v.c.title;
+      return '<th>' + esc(t.length > 10 ? t.slice(0, 10) + '…' : t) + '</th>';
     }).join('') + '</tr>';
     /* 按名字取分，不按下标：维度数量变过（六维→五维），老候选仍然是六维数组，
      * 用下标会把「生活保障」的分读到「环境风险」那一行去。 */
     var body = names.map(function (n) {
-      var vals = arr.map(function (c) {
-        var d = (c.dims || []).filter(function (x) { return x.name === n; })[0];
+      var vals = rows.map(function (v) {
+        var d = (v.dims || []).filter(function (x) { return x.name === n; })[0];
         return d ? d.score : null;
       });
-      var nums = vals.filter(function (v) { return v != null; });
+      var nums = vals.filter(function (x) { return x != null; });
       var best = nums.length ? Math.max.apply(null, nums) : null;
       var worst = nums.length ? Math.min.apply(null, nums) : null;
-      return '<tr><td>' + n + '</td>' + vals.map(function (v, i) {
-        if (v == null) return '<td class="v" style="color:#8b95a3">—</td>';
+      return '<tr><td>' + n + '</td>' + vals.map(function (x) {
+        if (x == null) return '<td class="v" style="color:#8b95a3">—</td>';
         // 每一维加粗标出最优的那套；多套并列最优时同时加粗
-        var isBest = best != null && v === best && nums.length > 1 && best !== worst;
-        return '<td class="v" style="color:' + M.scoreColor(v) + '">' + (isBest ? '<b>' + v + '</b>' : v) + '</td>';
+        var isBest = best != null && x === best && nums.length > 1 && best !== worst;
+        return '<td class="v" style="color:' + M.scoreColor(x) + '">' + (isBest ? '<b>' + x + '</b>' : x) + '</td>';
       }).join('') + '</tr>';
     }).join('');
-    var total = '<tr><td><b>综合</b></td>' + arr.map(function (c) {
-      return '<td class="v" style="color:' + M.scoreColor(c.score) + '"><b>' + c.score + '</b></td>';
-    }).join('') + '</tr>';
-    // 分差行：总分拉不开时，看哪一维在拉差距
-    var spreadRow = '<tr><td class="muted">各维分差（最高−最低）</td>' + names.map(function (n) {
-      var nums = arr.map(function (c) {
-        var d = (c.dims || []).filter(function (x) { return x.name === n; })[0];
+    /* 安全分与适配分分两行：安全分是位置属性、人人相同口径；
+     * 适配分按「当前用途」统一重算。两行并排才看得出换用途后名次会不会变。 */
+    function pickRow(label, pick, strong) {
+      return '<tr><td>' + label + '</td>' + rows.map(function (v) {
+        var x = pick(v);
+        if (x == null) return '<td class="v" style="color:#8b95a3">—</td>';
+        return '<td class="v" style="color:' + M.scoreColor(x) + '">' +
+          (strong ? '<b>' + x + '</b>' : x) + '</td>';
+      }).join('') + '</tr>';
+    }
+    var safeRow = pickRow('安全分', function (v) { return v.safe; }, false);
+    var fitRow = pickRow('适配分（' + esc(purposeName()) + '）', function (v) { return v.fit; }, true);
+    /* 各维分差单独一行文字，不放进表里：表头是「每个候选一列」，
+     * 分差却是「每一维一个数」，硬塞进表格会多出几列、跟候选列对不上（原来是错的）。 */
+    var spreads = names.map(function (n) {
+      var nums = rows.map(function (v) {
+        var d = (v.dims || []).filter(function (x) { return x.name === n; })[0];
         return d ? d.score : null;
-      }).filter(function (v) { return v != null; });
-      if (nums.length < 2) return '<td class="v muted">—</td>';
-      var sp = Math.max.apply(null, nums) - Math.min.apply(null, nums);
-      return '<td class="v" style="' + (sp >= 15 ? 'color:#b42318;font-weight:700' : '') + '">' + sp.toFixed(1) + '</td>';
-    }).join('') + '</tr>';
-    // 适配分只有新版候选才有（老候选没存），全都没有就不显示这一行
-    var hasFit = arr.some(function (c) { return c.fit; });
-    var fitRow = hasFit ? '<tr><td>综合适配</td>' + arr.map(function (c) {
-      if (!c.fit) return '<td class="v" style="color:#8b95a3">—</td>';
-      return '<td class="v" style="color:' + M.scoreColor(c.fit.score) + '">' + c.fit.score +
-        '<span class="muted" style="font-size:11px"> ' + esc(c.fit.purposeName) + '</span></td>';
-    }).join('') + '</tr>' : '';
+      }).filter(function (x) { return x != null; });
+      return { name: n, sp: nums.length >= 2 ? Math.max.apply(null, nums) - Math.min.apply(null, nums) : null };
+    }).filter(function (x) { return x.sp != null; });
+
+    var spreadTxt = spreads.length
+      ? '各维分差（最高−最低）：' + spreads.map(function (x) {
+          return esc(x.name) + ' <b style="' + (x.sp >= 15 ? 'color:#b42318' : '') + '">' + x.sp.toFixed(1) + '</b>';
+        }).join(' · ')
+      : '';
     var html = '<section class="card pad" style="margin-bottom:16px;border-color:#0f6b5c">' +
-      '<div class="sec-t">候选横向对比 <span class="muted" style="text-transform:none;letter-spacing:0">（综合＝安全分；适配分按各自用途算）</span>' +
+      '<div class="sec-t">候选横向对比 <span class="muted" style="text-transform:none;letter-spacing:0">（适配分按当前用途「' +
+      esc(purposeName()) + '」重算；换用途后回到这里再点一次，名次可能就变了）</span>' +
       '<button class="btn sm gray" id="cmpClose" style="float:right">关闭</button></div>' +
-      '<div style="overflow-x:auto"><table class="cmp-tb"><thead>' + head + '</thead><tbody>' + body + total + spreadRow + fitRow + '</tbody></table></div>' +
-      '<p class="hint small muted" style="margin:10px 0 0">总分接近时看「各维分差」：数字越大（标红 ≥15），说明候选在这一维差距越明显，优先比较这一维。</p></section>';
+      '<div style="overflow-x:auto"><table class="cmp-tb"><thead>' + head + '</thead><tbody>' +
+      body + safeRow + fitRow + '</tbody></table></div>' +
+      '<p class="hint small muted" style="margin:10px 0 0">' + spreadTxt +
+      (spreadTxt ? '。' : '') +
+      '安全分接近时看「适配分」和分差：分差 ≥15（标红）说明候选在这一维差距明显，优先比较这一维。</p></section>';
     $('result').insertAdjacentHTML('afterbegin', html);
     $('cmpClose').onclick = function () { $('cmpClose').closest('section').remove(); };
   }
