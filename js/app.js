@@ -233,12 +233,14 @@
     // 把定位精度摆到明面上：偏差多大用户得看得见，才知道要不要拖点校正
     var accTxt = '';
     if (p.locateSource === 'ip') accTxt = '　·　IP 粗定位（仅供参考，误差可达数公里）';
+    else if (p.locateSource === 'manual') accTxt = '　·　人工校准（估计 ±5–10 米，取决于点得准不准）';
     else if (p.accuracy != null) accTxt = '　·　定位精度 ±' + Math.round(p.accuracy) + ' 米';
     $('placeAddr').textContent = p.addr + accTxt;
     $('btnRun').disabled = false;
     // 换地址（而不是拖动微调）时，重置初始定位基准
     if (!state.originPlace || state.originPlace.title !== p.title) {
-      state.originPlace = { title: p.title, addr: p.addr, lng: p.lng, lat: p.lat };
+      state.originPlace = { title: p.title, addr: p.addr, lng: p.lng, lat: p.lat,
+                            accuracy: p.accuracy, locateSource: p.locateSource };
       state.adjusted = false;
     }
     if (state.map) {
@@ -247,6 +249,31 @@
       clearMarkers();
       addHomeMarker(p.lng, p.lat, p.title);
     }
+    drawAccuracy();
+  }
+
+  /* 精度圈：把设备给出的误差半径画在地图上。
+   * 浏览器定位永远到不了 2 米——手机 GPS 现实是 ±5–30 米，桌面 IP 是几百米到几公里，
+   * 把圈画出来，用户才知道"要不要把点拖到楼栋上"。人工校准后圈会缩到 8 米，
+   * 因为那时误差来自手指，不来自卫星。 */
+  function drawAccuracy() {
+    if (state.accCircle) {
+      try { state.map.remove(state.accCircle); } catch (e) {}
+      state.accCircle = null;
+    }
+    var p = state.place;
+    if (!state.map || !p || !p.accuracy) return;
+    if (!window.AMap || !AMap.Circle) return;   // 离线桩没有 Circle，跳过
+    var r = Math.max(8, Math.round(p.accuracy));
+    try {
+      state.accCircle = new AMap.Circle({
+        center: [p.lng, p.lat],
+        radius: r,
+        strokeColor: '#1d4ed8', strokeWeight: 1, strokeOpacity: .55,
+        fillColor: '#1d4ed8', fillOpacity: .10, zIndex: 8
+      });
+      state.map.add(state.accCircle);
+    } catch (e) {}
   }
   function clearMarkers() {
     state.markers.forEach(function (m) { state.map.remove(m); });
@@ -287,23 +314,31 @@
     if (!state.place) return;
     state.place.lng = lng; state.place.lat = lat;
     state.place.adjusted = true; state.adjusted = true;
+    /* 人工校准后误差来源从卫星变成手指，按 8 米计（这是估计值，不是测得值）。
+     * 精度圈跟着缩，用户能看出"已经校准过"和"还是原始定位"的区别。 */
+    state.place.locateSource = 'manual';
+    state.place.accuracy = 8;
+    drawAccuracy();
     var bar = $('adjustBar'); if (bar) bar.style.display = 'flex';
     var tip = $('adjustTip');
     if (tip) tip.textContent = '位置已手动调整（' + lng.toFixed(6) + ', ' + lat.toFixed(6) + '）';
     var coord = lng.toFixed(6) + ', ' + lat.toFixed(6);
-    $('placeAddr').textContent = '已手动微调 · ' + coord + '（正在取回地址…）';
+    var accSuf = '　·　人工校准（估计 ±5–10 米）';
+    $('placeAddr').textContent = '已手动微调 · ' + coord + accSuf + '（正在取回地址…）';
     G.regeocode(lng, lat).then(function (r) {
       if (state.place && state.place.adjusted) state.place.addr = r.name || state.place.addr;
-      $('placeAddr').textContent = '已手动微调 · ' + (r.name || coord);
+      $('placeAddr').textContent = '已手动微调 · ' + (r.name || coord) + accSuf;
     }).catch(function () {
-      $('placeAddr').textContent = '已手动微调 · ' + coord;
+      $('placeAddr').textContent = '已手动微调 · ' + coord + accSuf;
     });
     toast('位置已调整，点「按新位置重算」更新报告');
   }
   function resetPos() {
     if (!state.originPlace) return;
     state.place = { title: state.originPlace.title, addr: state.originPlace.addr,
-                    lng: state.originPlace.lng, lat: state.originPlace.lat };
+                    lng: state.originPlace.lng, lat: state.originPlace.lat,
+                    accuracy: state.originPlace.accuracy,
+                    locateSource: state.originPlace.locateSource };
     state.adjusted = false;
     afterLocate();
     var bar = $('adjustBar'); if (bar) bar.style.display = 'none';
