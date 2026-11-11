@@ -11,6 +11,16 @@
   }
   function fmt(m) { return M.fmtDist(m); }
 
+  /* 位置精度必须写在报告里：同一套房，±30 米的设备定位和人工点到楼栋，
+   * 算出来的"到地铁 690 米"是两回事。不写，读者会默认它精确到米。 */
+  function posTag(place) {
+    if (!place) return '';
+    if (place.locateSource === 'manual') return '位置：人工校准（估计 ±5–10 米）';
+    if (place.locateSource === 'ip') return '位置：IP 粗定位（误差可达数公里）';
+    if (place.accuracy != null) return '位置：设备定位 ±' + Math.round(place.accuracy) + ' 米';
+    return '';
+  }
+
   /* 总分环。label 说明环里这个数是什么分——
    * 2026-11-10 起环里放的是「适配分」（随用途变），不再固定放安全分。
    * 颜色跟等级走（等级按相对位置划），不跟绝对分数走，否则环是青色、徽章却是 A。 */
@@ -430,6 +440,7 @@
               '<span class="tag">优势：' + esc(res.highlights.join(' · ')) + '</span>' +
               '<span class="tag">短板：' + esc(res.gaps.join(' · ')) + '</span>' +
               '<span class="tag">' + esc(place.addr) + '</span>' +
+              (posTag(place) ? '<span class="tag">' + posTag(place) + '</span>' : '') +
             '</div>' +
             (ladder ? '<p class="hint small muted" style="margin:10px 0 0">等级按<b>相对位置</b>划，不按绝对分数：' +
               ladder + '。参考基准是按城市住宅常见条件设定的估计分布（不是实测抽样），所以改评分口径只会让分数变，' +
