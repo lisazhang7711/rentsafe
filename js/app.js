@@ -245,7 +245,7 @@
     }
     if (state.map) {
       state.map.setCenter([p.lng, p.lat]);
-      state.map.setZoom(16);   // 微调要看得清楼栋，比原来的 15 再近一级
+      state.map.setZoom(17);   // 先给楼栋与周边路的关系；真正校准时会自动放到 18 级
       clearMarkers();
       addHomeMarker(p.lng, p.lat, p.title);
     }
@@ -317,13 +317,16 @@
     /* 人工校准后误差来源从卫星变成手指，按 8 米计（这是估计值，不是测得值）。
      * 精度圈跟着缩，用户能看出"已经校准过"和"还是原始定位"的区别。 */
     state.place.locateSource = 'manual';
-    state.place.accuracy = 8;
+    /* 18 级下 1 像素约 0.5–0.6 米，点楼栋的误差落在 2–5 米；
+       这是估计值，不是测得值，所以文案里写「估计」。 */
+    state.place.accuracy = 5;
+    if (state.map && state.map.getZoom && state.map.getZoom() < 18) state.map.setZoom(18);
     drawAccuracy();
     var bar = $('adjustBar'); if (bar) bar.style.display = 'flex';
     var tip = $('adjustTip');
-    if (tip) tip.textContent = '位置已手动调整（' + lng.toFixed(6) + ', ' + lat.toFixed(6) + '）';
+    if (tip) tip.textContent = '已校准到 ' + lng.toFixed(6) + ', ' + lat.toFixed(6) + '（18 级，1 像素约 0.5 米）';
     var coord = lng.toFixed(6) + ', ' + lat.toFixed(6);
-    var accSuf = '　·　人工校准（估计 ±5–10 米）';
+    var accSuf = '　·　人工校准（估计 ±2–5 米，已放大到 18 级）';
     $('placeAddr').textContent = '已手动微调 · ' + coord + accSuf + '（正在取回地址…）';
     G.regeocode(lng, lat).then(function (r) {
       if (state.place && state.place.adjusted) state.place.addr = r.name || state.place.addr;
