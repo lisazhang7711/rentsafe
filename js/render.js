@@ -15,7 +15,7 @@
    * 算出来的"到地铁 690 米"是两回事。不写，读者会默认它精确到米。 */
   function posTag(place) {
     if (!place) return '';
-    if (place.locateSource === 'manual') return '位置：人工校准（估计 ±5–10 米）';
+    if (place.locateSource === 'manual') return '位置：人工校准（估计 ±2–5 米）';
     if (place.locateSource === 'ip') return '位置：IP 粗定位（误差可达数公里）';
     if (place.accuracy != null) return '位置：设备定位 ±' + Math.round(place.accuracy) + ' 米';
     return '';
