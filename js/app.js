@@ -7,7 +7,7 @@
   var $ = function (id) { return document.getElementById(id); };
   var esc = RS.render.esc;
 
-  // homeMarker：目标位置那个可拖动的绿点，单独管理（其余点位仍放 state.markers）
+  // homeMarker：目标位置那个可拖动的图钉，单独管理（其余点位仍放 state.markers）
   // originPlace：地理编码给出的初始定位，供「恢复初始定位」用
   var state = { mode: 'rent', purpose: 'commute', place: null, result: null, map: null, markers: [],
                 homeMarker: null, originPlace: null, adjusted: false };
@@ -250,11 +250,17 @@
       state.adjusted = false;
     }
     if (state.map) {
-      state.map.setCenter([p.lng, p.lat]);
-      // 精度差就放大到 18 级，拖点才对得准楼；精度好就 17 级，能看清周边路网
-      state.map.setZoom(p.accuracy != null && p.accuracy > 60 ? 18 : 17);
+      /* 顺序很关键：先清、先画点，再动镜头。
+       * 反过来的话标记是在地图跳转途中加进去的，高德会把它的像素位置按旧投影算；
+       * 之后若地图不再重绘（手机上瓦片命中缓存时很常见），点就永远停在屏幕外——
+       * 用户看到的正是「绿点不见了」，而蓝圈是矢量层画的、位置正常。 */
+      var z = p.accuracy != null && p.accuracy > 60 ? 18 : 17;
       clearMarkers();
       addHomeMarker(p.lng, p.lat, p.title);
+      // 用瞬时跳转而不是带动画：动画期间标记位置会连续错算，收尾时机也不可控
+      state.map.setCenter([p.lng, p.lat]);
+      state.map.setZoom(z);
+      syncHome();   // 连续几次强制重算像素位置，兜住各种机型
     }
     drawAccuracy();
   }
@@ -268,18 +274,37 @@
       try { state.map.remove(state.accCircle); } catch (e) {}
       state.accCircle = null;
     }
+    if (state.accDot) {
+      try { state.map.remove(state.accDot); } catch (e) {}
+      state.accDot = null;
+    }
     var p = state.place;
     if (!state.map || !p || !p.accuracy) return;
     if (!window.AMap || !AMap.Circle) return;   // 离线桩没有 Circle，跳过
     var r = Math.max(8, Math.round(p.accuracy));
     try {
+      /* clickable:false + bubble:true 是这两个问题的关键：
+       * 圈只是「误差范围」的示意，不该吃掉点击——手指落在圈里任意位置，
+       * 事件要能穿到地图上，触发「点哪挪哪」。之前圈盖住了整片区域，
+       * 用户点/拖圈里都没反应，看起来就像「蓝框无法拖动校准」。 */
       state.accCircle = new AMap.Circle({
         center: [p.lng, p.lat],
         radius: r,
         strokeColor: '#1d4ed8', strokeWeight: 1, strokeOpacity: .55,
-        fillColor: '#1d4ed8', fillOpacity: .10, zIndex: 8
+        fillColor: '#1d4ed8', fillOpacity: .10, zIndex: 8,
+        clickable: false, bubble: true
       });
       state.map.add(state.accCircle);
+      /* 矢量小圆点：万一 DOM 图钉在某些机型上没渲染出来（实测有这个问题），
+       * 这个点还留在原地，至少用户看得见「目标在哪」。半径按米算，18 级约 ±8 像素。 */
+      state.accDot = new AMap.Circle({
+        center: [p.lng, p.lat],
+        radius: 5,
+        strokeColor: '#ffffff', strokeWeight: 2, strokeOpacity: 1,
+        fillColor: '#0f6b5c', fillOpacity: 1, zIndex: 9,
+        clickable: false, bubble: true
+      });
+      state.map.add(state.accDot);
     } catch (e) {}
   }
   function clearMarkers() {
@@ -293,17 +318,36 @@
 
   /* ---------------- 位置手动调整 ----------------
    * 地理编码经常落在小区门口、路口甚至隔壁街区，直接用它算距离会系统性偏大。
-   * 所以目标点做成可拖动的：拖动 / 点地图都能挪，挪完必须重新评估（结果不会自动跟着变）。 */
+   * 所以目标点做成可拖动的：拖动 / 点地图都能挪，挪完必须重新评估（结果不会自动跟着变）。
+   *
+   * 【2026-11-12 改版】原来是 16 px 小圆点，两个毛病：
+   *   1) 太小，手机上很难按中，用户反馈「找不到绿点」；
+   *   2) 用户会以为整片蓝圈都能拖，实际只有那 16 px 能拖。
+   * 现在换成 34×46 的图钉（钉尖对准坐标），拖动时精度圈实时跟随。 */
+  var PIN_HTML = '<div title="按住拖动微调位置" style="width:34px;height:46px;line-height:0;' +
+    'cursor:move;touch-action:none;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))">' +
+    '<svg viewBox="0 0 34 46" width="34" height="46" xmlns="http://www.w3.org/2000/svg">' +
+    '<path d="M17 44.2C17 44.2 32.4 26.6 32.4 17.4C32.4 8.9 25.5 2 17 2C8.5 2 1.6 8.9 1.6 17.4' +
+    'C1.6 26.6 17 44.2 17 44.2Z" fill="#0f6b5c" stroke="#fff" stroke-width="2.6"/>' +
+    '<circle cx="17" cy="16.8" r="5.4" fill="#fff"/></svg></div>';
+
   function addHomeMarker(lng, lat, title) {
     if (!state.map || !window.AMap) return;
     var mk = new AMap.Marker({
       position: [lng, lat],
       title: title || '目标位置',
       draggable: true,
-      offset: new AMap.Pixel(-9, -9),
+      offset: new AMap.Pixel(-17, -46),   // 图钉尖对准坐标
       zIndex: 200,
-      content: '<span title="拖动我微调位置" style="display:inline-block;width:16px;height:16px;border-radius:50%;' +
-        'background:#0f6b5c;border:2px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.45);cursor:move"></span>'
+      content: PIN_HTML
+    });
+    // 拖动途中让精度圈跟着走，松手才算数（否则一路狂刷逆地理）
+    mk.on('dragging', function () {
+      var q = mk.getPosition();
+      if (!q) return;
+      var pt = [q.getLng ? q.getLng() : q.lng, q.getLat ? q.getLat() : q.lat];
+      if (state.accCircle) { try { state.accCircle.setCenter(pt); } catch (e) {} }
+      if (state.accDot) { try { state.accDot.setCenter(pt); } catch (e) {} }
     });
     mk.on('dragend', function () {
       var p = mk.getPosition();
@@ -311,6 +355,18 @@
     });
     state.map.add(mk);
     state.homeMarker = mk;
+  }
+
+  /* 标记位置兜底重算：地图动画途中加进去的 marker，像素位置可能按旧投影算，
+   * 之后若地图不再重绘，点就停在屏幕外（看起来就是「点不见了」）。
+   * 镜头动完再 setPosition 一次，强制按新投影重算。 */
+  function syncHome() {
+    [0, 120, 300, 600, 1000].forEach(function (t) {
+      setTimeout(function () {
+        if (!state.homeMarker || !state.place) return;
+        try { state.homeMarker.setPosition([state.place.lng, state.place.lat]); } catch (e) {}
+      }, t);
+    });
   }
   function moveHome(lng, lat) {
     if (state.homeMarker) state.homeMarker.setPosition([lng, lat]);
@@ -388,7 +444,7 @@
       if (r.source === 'ip') {
         toast('只拿到 IP 粗定位（城市级，误差可达数公里）——桌面浏览器在国内通常如此。建议直接输入小区名，或用手机打开。');
       } else if (r.accuracy != null && r.accuracy > 60) {
-        toast('定位精度 ±' + Math.round(r.accuracy) + ' 米，已放大到 18 级：请把绿点拖到你住的那栋楼，再点「按新位置重算」。');
+        toast('定位精度 ±' + Math.round(r.accuracy) + ' 米，已放大到 18 级：请把图钉拖到你住的那栋楼，再点「按新位置重算」。');
       } else if (r.accuracy != null) {
         toast('定位成功，精度 ±' + Math.round(r.accuracy) + ' 米（' +
           (r.accuracy <= 25 ? '楼栋级，可直接用' : '街区级，想更准可拖点微调') + '）');
@@ -1050,6 +1106,11 @@
 
     G.initMap($('miniMap'), 116.4074, 39.9042, 11).then(function (map) {
       state.map = map;
+      // 镜头一变就校一次点位置：程序 setCenter / 手势缩放都可能让 marker 的像素位置落后一帧
+      map.on('moveend', function () {
+        if (!state.homeMarker || !state.place) return;
+        try { state.homeMarker.setPosition([state.place.lng, state.place.lat]); } catch (e) {}
+      });
       // 点地图也能挪位置（比拖点更省事），但必须先有目标位置
       map.on('click', function (e) {
         if (!e || !e.lnglat) return;
