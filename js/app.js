@@ -234,7 +234,13 @@
     var accTxt = '';
     if (p.locateSource === 'ip') accTxt = '　·　IP 粗定位（仅供参考，误差可达数公里）';
     else if (p.locateSource === 'manual') accTxt = '　·　人工校准（估计 ±5–10 米，取决于点得准不准）';
-    else if (p.accuracy != null) accTxt = '　·　定位精度 ±' + Math.round(p.accuracy) + ' 米';
+    else if (p.accuracy != null) {
+      var a = Math.round(p.accuracy);
+      // 分档说人话：多少米 ≈ 能不能对到楼
+      var tier = a <= 25 ? '楼栋级' : (a <= 60 ? '街区级' : '偏粗，建议拖点校准');
+      accTxt = '　·　定位精度 ±' + a + ' 米（' + tier + '）' +
+        (p.locateSource === 'gps-refined' ? '，已连续采样收敛' : '');
+    }
     $('placeAddr').textContent = p.addr + accTxt;
     $('btnRun').disabled = false;
     // 换地址（而不是拖动微调）时，重置初始定位基准
@@ -245,7 +251,8 @@
     }
     if (state.map) {
       state.map.setCenter([p.lng, p.lat]);
-      state.map.setZoom(17);   // 先给楼栋与周边路的关系；真正校准时会自动放到 18 级
+      // 精度差就放大到 18 级，拖点才对得准楼；精度好就 17 级，能看清周边路网
+      state.map.setZoom(p.accuracy != null && p.accuracy > 60 ? 18 : 17);
       clearMarkers();
       addHomeMarker(p.lng, p.lat, p.title);
     }
@@ -365,7 +372,10 @@
    * 现在统一走 RS.geo.locate()：高德插件优先（自带纠偏），失败降级原生并做坐标转换。 */
   function locateMe() {
     if (!navigator.geolocation) return toast('当前浏览器不支持定位（也需 HTTPS 页面）');
-    toast('正在获取高精度位置…');
+    var btn = $('btnLocate');
+    var old = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '正在定位（精度不够会再采样，最多 19 秒）…'; }
+    toast('正在获取高精度位置：首次结果粗会继续采样收敛，请让页面保持在前台');
     RS.geo.locate().then(function (r) {
       state.place = {
         title: r.name || '当前位置',
@@ -377,13 +387,16 @@
       afterLocate();
       if (r.source === 'ip') {
         toast('只拿到 IP 粗定位（城市级，误差可达数公里）——桌面浏览器在国内通常如此。建议直接输入小区名，或用手机打开。');
-      } else if (r.accuracy != null && r.accuracy > 200) {
-        toast('定位精度约 ±' + Math.round(r.accuracy) + ' 米，偏差偏大：请拖动绿点到实际楼栋后再评估。');
+      } else if (r.accuracy != null && r.accuracy > 60) {
+        toast('定位精度 ±' + Math.round(r.accuracy) + ' 米，已放大到 18 级：请把绿点拖到你住的那栋楼，再点「按新位置重算」。');
       } else if (r.accuracy != null) {
-        toast('定位成功，精度约 ±' + Math.round(r.accuracy) + ' 米');
+        toast('定位成功，精度 ±' + Math.round(r.accuracy) + ' 米（' +
+          (r.accuracy <= 25 ? '楼栋级，可直接用' : '街区级，想更准可拖点微调') + '）');
       }
     }).catch(function (e) {
       toast('定位失败：' + ((e && e.message) || '请检查定位权限') + '。桌面浏览器在国内常拿不到准确定位，建议直接输入小区名。');
+    }).then(function () {
+      if (btn) { btn.disabled = false; btn.textContent = old; }
     });
   }
 
