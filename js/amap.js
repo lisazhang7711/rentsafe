@@ -140,11 +140,15 @@
       try {
         gl = new AMap.Geolocation({
           enableHighAccuracy: true,  // 请求 GPS 级精度，手机端必须开
+          GeoLocationFirst: true,    // 优先走 GPS/北斗，别一上来就给 Wi-Fi 基站结果
           timeout: 10000,
           maximumAge: 0,             // 不复用几分钟前的旧位置
           convert: true,             // 坐标纠偏到高德系
           needAddress: true,
-          extensions: 'all'
+          extensions: 'all',
+          showButton: false,
+          panToLocation: false,
+          zoomToAccuracy: false
         });
       } catch (e) { clearTimeout(timer); return reject(e); }
       gl.getCurrentPosition(function (status, result) {
@@ -190,10 +194,78 @@
     });
   }
 
-  /** 浏览器定位：高德插件优先，失败降级原生 + 纠偏。返回 GCJ-02 坐标 */
+  /**
+   * GPS 精化：连续采样 6–9 秒，取「最稳的那一簇」。
+   * 浏览器单次 getCurrentPosition 拿到的往往是芯片刚搜到星的第一帧，
+   * 误差常是 80–150 m；持续采样后芯片收敛，能掉到 15–40 m。
+   * 做法：取精度最好的一帧做锚点，把精度在 2 倍以内、且距离不跳（>2 倍精度视为漂移）的帧
+   * 按 1/acc² 加权平均，得到一个比任何单帧都稳的中心点。
+   * 桌面浏览器没有 GPS，采样再多也不会变准——所以只在 accuracy > 阈值时才跑。
+   */
+  function refineGps(deadlineMs, targetAcc) {
+    return new Promise(function (resolve) {
+      if (!navigator.geolocation || !navigator.geolocation.watchPosition) return resolve(null);
+      var samples = [], watchId = null, timer = null, done = false;
+
+      function km(a, b) {   // 粗略距离足够做跳点剔除
+        var dx = (a.lng - b.lng) * 111320 * Math.cos(a.lat * Math.PI / 180);
+        var dy = (a.lat - b.lat) * 110540;
+        return Math.sqrt(dx * dx + dy * dy);
+      }
+      function finish() {
+        if (done) return; done = true;
+        if (watchId != null) { try { navigator.geolocation.clearWatch(watchId); } catch (e) {} }
+        clearTimeout(timer);
+        if (!samples.length) return resolve(null);
+        samples.sort(function (a, b) { return a.acc - b.acc; });
+        var best = samples[0];
+        var wsum = 0, lng = 0, lat = 0;
+        samples.forEach(function (s) {
+          if (s.acc > best.acc * 2) return;                       // 精度差一档的丢掉
+          if (km(s, best) > Math.max(25, best.acc * 2)) return;    // 位置跳变的丢掉
+          var w = 1 / (s.acc * s.acc);
+          wsum += w; lng += s.lng * w; lat += s.lat * w;
+        });
+        if (!wsum) { lng = best.lng; lat = best.lat; wsum = 1; }
+        resolve({ lng: lng / wsum, lat: lat / wsum, accuracy: best.acc, samples: samples.length });
+      }
+      function onPos(pos) {
+        var c = pos.coords;
+        samples.push({ lng: c.longitude, lat: c.latitude, acc: c.accuracy || 9999, t: Date.now() });
+        // 已经收到多次且精度达标，提前收工
+        if (samples.length >= 3 && c.accuracy && c.accuracy <= targetAcc) finish();
+        else if (samples.length >= 12) finish();
+      }
+      function onErr() { finish(); }
+      try {
+        watchId = navigator.geolocation.watchPosition(onPos, onErr, {
+          enableHighAccuracy: true, maximumAge: 0, timeout: deadlineMs
+        });
+      } catch (e) { return resolve(null); }
+      timer = setTimeout(finish, deadlineMs);
+    });
+  }
+
+  /** 浏览器定位：高德插件优先，失败降级原生 + 纠偏；精度不够时再连续采样精化。返回 GCJ-02 坐标 */
   function locate() {
     return load().then(function (AMap) {
       return locateByPlugin(AMap).catch(function () { return locateByNative(); });
+    }).then(function (r) {
+      // IP 兜底是公里级，精化没有意义；已经够准的也不再拖 9 秒
+      if (!r || r.source === 'ip') return r;
+      if (r.accuracy != null && r.accuracy <= 35) return r;
+      return refineGps(9000, 30).then(function (fix) {
+        if (!fix || !(r.accuracy == null || fix.accuracy < r.accuracy - 5)) return r;
+        return toGCJ02(fix.lng, fix.lat, 'gps').then(function (g) {
+          r.lng = g.lng; r.lat = g.lat;
+          r.accuracy = fix.accuracy;
+          r.source = 'gps-refined';
+          return regeocode(g.lng, g.lat).then(function (geo) {
+            if (geo && geo.name) r.name = geo.name;
+            return r;
+          }).catch(function () { return r; });
+        }).catch(function () { return r; });
+      }).catch(function () { return r; });
     });
   }
 
@@ -438,6 +510,6 @@
     load: load, suggest: suggest, geocode: geocode,
     regeocode: regeocode, nearBatch: nearBatch, search: search,
     routeBatch: routeBatch, initMap: initMap,
-    toGCJ02: toGCJ02, locate: locate
+    toGCJ02: toGCJ02, locate: locate, refineGps: refineGps
   };
 })();
